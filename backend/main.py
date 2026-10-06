@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.db.base import engine, Base
 from app.db import init_models  # noqa: F401 – registra todos los modelos en Base
 
-from app.routers import tables, orders, billing, printing, menu, auth, finances, dashboard, creams, backup
+from app.routers import tables, orders, billing, printing, menu, auth, finances, dashboard, creams, backup, settings as settings_router
 from app.ws.kitchen import router as ws_router
 
 logging.basicConfig(
@@ -57,21 +57,32 @@ app.add_middleware(
 )
 
 # ─── Routers ──────────────────────────────────────────────────────────────────
-app.include_router(tables.router)
-app.include_router(orders.router)
-app.include_router(billing.router)
-app.include_router(printing.router)
-app.include_router(menu.router)      # CRUD Carta (categorías + productos)
-app.include_router(auth.router)      # Auth y usuarios
-app.include_router(finances.router)
-app.include_router(dashboard.router)
-app.include_router(creams.router)
-app.include_router(backup.router)    # Respaldo (importar/exportar BD)
-app.include_router(ws_router)    # WebSocket endpoints (/ws/kitchen, /ws/cashier)
+# Registrar routers tanto en raíz como bajo el prefijo /api para soportar
+# tanto el modo desarrollo (Vite) como la SPA compilada en producción.
+api_routers = [
+    tables.router,
+    orders.router,
+    billing.router,
+    printing.router,
+    menu.router,      # CRUD Carta (categorías + productos)
+    auth.router,      # Auth y usuarios
+    finances.router,
+    dashboard.router,
+    creams.router,
+    backup.router,    # Respaldo (importar/exportar BD)
+    settings_router.router,  # Configuración del negocio y recibos
+]
+
+for r in api_routers:
+    app.include_router(r)
+    app.include_router(r, prefix="/api")
+
+app.include_router(ws_router)    # WebSocket endpoints (/ws/kitchen, /ws/cashier, etc.)
 
 
 # ─── Health Check ─────────────────────────────────────────────────────────────
 @app.get("/health", tags=["Health"])
+@app.get("/api/health", tags=["Health"])
 async def health():
     return {"status": "ok", "service": "boquita-come-pos"}
 
@@ -92,7 +103,7 @@ if os.path.exists(assets_dir):
 @app.get("/{full_path:path}", include_in_schema=False)
 async def serve_spa(full_path: str):
     # Excluir rutas del backend / API si no existieran
-    if full_path in ["docs", "redoc", "openapi.json"]:
+    if full_path.startswith("api/") or full_path in ["docs", "redoc", "openapi.json", "api"]:
         raise HTTPException(status_code=404, detail="Not Found")
 
     target_file = os.path.join(frontend_dist, full_path)

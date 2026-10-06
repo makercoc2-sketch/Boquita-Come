@@ -51,6 +51,14 @@ class OrderCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class DeliveryOrderCreate(BaseModel):
+    user_id: Optional[int] = None
+    customer_name: str
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class OrderClose(BaseModel):
     payment_method: str = Field(..., description="Efectivo, Tarjeta, Yape, etc.")
 
@@ -76,9 +84,20 @@ class OrderItemUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class SendKitchenPayload(BaseModel):
+    user_id: Optional[int] = None
+
+
+class OrderPatch(BaseModel):
+    user_id: Optional[int] = None
+    guest_count: Optional[int] = None
+    notes: Optional[str] = None
+
+
 class KitchenTicketOut(BaseModel):
     id: int
     ticket_number: int
+    user_id: Optional[int] = None
     items_snapshot: list
     created_at: datetime
 
@@ -92,12 +111,14 @@ class OrderOut(BaseModel):
     status: OrderStatus
     guest_count: Optional[int]
     notes: Optional[str]
+    extra: Optional[dict]
     subtotal: float
     created_at: datetime
     items: List[OrderItemOut]
     kitchen_tickets: List[KitchenTicketOut]
 
     model_config = {"from_attributes": True}
+
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -142,8 +163,77 @@ async def create_order(payload: OrderCreate, db: AsyncSession = Depends(get_db))
     return order
 
 
+# ── VIRTUAL_DELIVERY_TABLE_NUMBER — mesa número 0 reservada para delivery ───────
+DELIVERY_TABLE_NUMBER = 0
+
+
+@router.post("/delivery", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
+async def create_delivery_order(payload: DeliveryOrderCreate, db: AsyncSession = Depends(get_db)):
+    """Crea una orden de tipo DELIVERY usando la mesa virtual (número 0)."""
+    # Obtener la mesa virtual de delivery
+    result = await db.execute(
+        select(Table).where(Table.number == DELIVERY_TABLE_NUMBER)
+    )
+    delivery_table = result.scalars().first()
+    if not delivery_table:
+        raise HTTPException(status_code=500, detail="Mesa virtual de delivery no configurada. Contacta al administrador.")
+
+    order = Order(
+        table_id=delivery_table.id,
+        user_id=payload.user_id,
+        notes=payload.notes,
+        extra={
+            "order_type": "delivery",
+            "customer_name": payload.customer_name,
+            "customer_phone": payload.customer_phone or "",
+            "customer_address": payload.customer_address or "",
+        },
+    )
+    db.add(order)
+    await db.flush()
+    await db.refresh(order)
+
+    # Notificar via WebSocket (no cambia estado de mesa real)
+    await manager.broadcast_to_room("global", {
+        "event": "new_delivery_order",
+        "order_id": order.id,
+        "customer_name": payload.customer_name,
+    })
+
+    return order
+
+
+@router.get("/delivery/active", response_model=List[OrderOut])
+async def get_active_delivery_orders(db: AsyncSession = Depends(get_db)):
+    """Devuelve todas las órdenes de delivery activas (OPEN o SENT)."""
+    result = await db.execute(
+        select(Table).where(Table.number == DELIVERY_TABLE_NUMBER)
+    )
+    delivery_table = result.scalars().first()
+    if not delivery_table:
+        return []
+
+    from sqlalchemy.orm import selectinload
+    orders_result = await db.execute(
+        select(Order)
+        .options(
+            selectinload(Order.items).selectinload(OrderItem.product),
+            selectinload(Order.kitchen_tickets),
+            selectinload(Order.user),
+        )
+        .where(
+            Order.table_id == delivery_table.id,
+            Order.status.in_([OrderStatus.OPEN, OrderStatus.SENT]),
+        )
+        .order_by(Order.id.desc())
+    )
+    return orders_result.scalars().all()
+
+
+
 @router.get("/active/{table_id}", response_model=OrderOut)
 async def get_active_order(table_id: int, db: AsyncSession = Depends(get_db)):
+
     """Devuelve la orden activa (OPEN o SENT) de una mesa."""
     result = await db.execute(
         select(Order).where(
@@ -174,7 +264,10 @@ async def get_active_kitchen_tickets(db: AsyncSession = Depends(get_db)):
     query = (
         select(KitchenTicket)
         .join(Order, Order.id == KitchenTicket.order_id)
-        .options(joinedload(KitchenTicket.order).joinedload(Order.user))
+        .options(
+            joinedload(KitchenTicket.user),
+            joinedload(KitchenTicket.order).joinedload(Order.user),
+        )
         .where(Order.status.in_([OrderStatus.OPEN, OrderStatus.SENT]))
         .order_by(KitchenTicket.created_at.desc())
     )
@@ -199,7 +292,10 @@ async def get_active_kitchen_tickets(db: AsyncSession = Depends(get_db)):
     payloads = []
     for t in tickets:
         table = await db.get(Table, t.order.table_id)
-        waiter_name = t.order.user.name if (t.order and t.order.user) else None
+        # Prioridad absoluta al mozo que emitió este ticket específico
+        waiter_obj = t.user or (t.order.user if t.order else None)
+        waiter_id = t.user_id or (t.order.user_id if t.order else None)
+        waiter_name = waiter_obj.name if waiter_obj else None
         
         # Inyectar el estatus más reciente
         updated_items = []
@@ -211,18 +307,29 @@ async def get_active_kitchen_tickets(db: AsyncSession = Depends(get_db)):
                 updated_it["status"] = item_status_map.get(item_id, "PENDING") if item_id else "PENDING"
                 updated_items.append(updated_it)
 
+        # Delivery info
+        order_extra = t.order.extra if t.order and isinstance(t.order.extra, dict) else {}
+        is_delivery = order_extra.get("order_type") == "delivery"
+
         payloads.append({
             "ticket_id": t.id,
             "order_id": t.order.id,
             "table_id": table.id if table else None,
             "table_number": table.number if table else None,
             "ticket_number": t.ticket_number,
-            "waiter_id": t.order.user_id if t.order else None,
+            "waiter_id": waiter_id,
             "waiter_name": waiter_name,
+            "is_delivery": is_delivery,
+            "delivery_info": {
+                "customer_name": order_extra.get("customer_name", ""),
+                "customer_phone": order_extra.get("customer_phone", ""),
+                "customer_address": order_extra.get("customer_address", ""),
+            } if is_delivery else None,
             "items": updated_items,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         })
     return payloads
+
 
 
 @router.get("/kitchen-tickets/today", response_model=List[dict])
@@ -237,7 +344,10 @@ async def get_today_kitchen_tickets(db: AsyncSession = Depends(get_db)):
     query = (
         select(KitchenTicket)
         .join(Order, Order.id == KitchenTicket.order_id)
-        .options(joinedload(KitchenTicket.order).joinedload(Order.user))
+        .options(
+            joinedload(KitchenTicket.user),
+            joinedload(KitchenTicket.order).joinedload(Order.user),
+        )
         .where(KitchenTicket.created_at >= today_start)
         .order_by(KitchenTicket.created_at.desc())
     )
@@ -262,7 +372,9 @@ async def get_today_kitchen_tickets(db: AsyncSession = Depends(get_db)):
     payloads = []
     for t in tickets:
         table = await db.get(Table, t.order.table_id)
-        waiter_name = t.order.user.name if (t.order and t.order.user) else None
+        waiter_obj = t.user or (t.order.user if t.order else None)
+        waiter_id = t.user_id or (t.order.user_id if t.order else None)
+        waiter_name = waiter_obj.name if waiter_obj else None
         
         updated_items = []
         snapshot = t.items_snapshot if isinstance(t.items_snapshot, list) else []
@@ -273,18 +385,29 @@ async def get_today_kitchen_tickets(db: AsyncSession = Depends(get_db)):
                 updated_it["status"] = item_status_map.get(item_id, "PENDING") if item_id else "PENDING"
                 updated_items.append(updated_it)
 
+        # Delivery info
+        order_extra = t.order.extra if t.order and isinstance(t.order.extra, dict) else {}
+        is_delivery = order_extra.get("order_type") == "delivery"
+
         payloads.append({
             "ticket_id": t.id,
             "order_id": t.order.id,
             "table_id": table.id if table else None,
             "table_number": table.number if table else None,
             "ticket_number": t.ticket_number,
-            "waiter_id": t.order.user_id if t.order else None,
+            "waiter_id": waiter_id,
             "waiter_name": waiter_name,
+            "is_delivery": is_delivery,
+            "delivery_info": {
+                "customer_name": order_extra.get("customer_name", ""),
+                "customer_phone": order_extra.get("customer_phone", ""),
+                "customer_address": order_extra.get("customer_address", ""),
+            } if is_delivery else None,
             "items": updated_items,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         })
     return payloads
+
 
 
 @router.post("/{order_id}/items", response_model=OrderOut)
@@ -345,14 +468,46 @@ async def add_items(
 
 
 
+@router.patch("/{order_id}", response_model=OrderOut)
+async def update_order_details(order_id: int, payload: OrderPatch, db: AsyncSession = Depends(get_db)):
+    """Permite actualizar datos de la orden, por ejemplo el mozo asignado (user_id)."""
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Orden no encontrada.")
+    if payload.user_id is not None:
+        order.user_id = payload.user_id
+    if payload.guest_count is not None:
+        order.guest_count = payload.guest_count
+    if payload.notes is not None:
+        order.notes = payload.notes
+    await db.flush()
+    await db.refresh(order)
+    return order
+
+
 @router.post("/{order_id}/send-kitchen", response_model=KitchenTicketOut)
-async def send_to_kitchen(order_id: int, db: AsyncSession = Depends(get_db)):
+async def send_to_kitchen(
+    order_id: int,
+    payload: Optional[SendKitchenPayload] = None,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Genera un KitchenTicket con los ítems que aún NO han sido enviados a cocina.
     Marca esos ítems como enviados (sent_to_kitchen_at = now).
     Transmite el ticket por WebSocket a la pantalla de cocina.
     """
-    order = await db.get(Order, order_id)
+    from sqlalchemy.orm import selectinload
+    query = (
+        select(Order)
+        .options(
+            selectinload(Order.items).selectinload(OrderItem.product),
+            selectinload(Order.kitchen_tickets),
+            selectinload(Order.user),
+        )
+        .where(Order.id == order_id)
+    )
+    res = await db.execute(query)
+    order = res.scalars().first()
     if not order:
         raise HTTPException(status_code=404, detail="Orden no encontrada.")
 
@@ -365,6 +520,27 @@ async def send_to_kitchen(order_id: int, db: AsyncSession = Depends(get_db)):
         )
 
     now = datetime.now(timezone.utc)
+
+    # Identificar el mozo/usuario que envía el pedido a cocina
+    sender_id = (payload.user_id if payload and payload.user_id else None) or order.user_id
+    waiter_name = None
+    waiter_id = sender_id
+
+    if sender_id:
+        user_obj = await db.get(User, sender_id)
+        if user_obj:
+            waiter_name = user_obj.name
+            waiter_id = user_obj.id
+            sender_role_str = str(user_obj.role.value if hasattr(user_obj.role, "value") else user_obj.role).lower()
+            mozo_roles = ["mozo", "caja"]
+            # Si la orden no tenía usuario o si el que envía es un mozo, asignamos la comanda a dicho mozo
+            if not order.user_id or (sender_role_str in mozo_roles):
+                order.user_id = user_obj.id
+    elif order and order.user_id:
+        user_obj = await db.get(User, order.user_id)
+        if user_obj:
+            waiter_name = user_obj.name
+            waiter_id = user_obj.id
 
     # Descifrar los destinos buscando las categorías
     category_ids = {item.product.category_id for item in new_items if item.product and item.product.category_id}
@@ -397,6 +573,7 @@ async def send_to_kitchen(order_id: int, db: AsyncSession = Depends(get_db)):
         order_id=order.id,
         ticket_number=ticket_number,
         items_snapshot=snapshot,
+        user_id=waiter_id,
     )
     db.add(ticket)
     order.status = OrderStatus.SENT
@@ -412,13 +589,11 @@ async def send_to_kitchen(order_id: int, db: AsyncSession = Depends(get_db)):
             "table": {"id": table.id, "number": table.number, "status": table.status.value},
         })
 
-    waiter_name = None
-    if order and order.user_id:
-        user_obj = await db.get(User, order.user_id)
-        if user_obj:
-            waiter_name = user_obj.name
+    # Delivery info from order.extra
+    order_extra = order.extra if isinstance(order.extra, dict) else {}
+    is_delivery = order_extra.get("order_type") == "delivery"
 
-    payload = {
+    ws_payload = {
         "event": "new_ticket",
         "ticket": {
             "ticket_id": ticket.id,
@@ -426,15 +601,22 @@ async def send_to_kitchen(order_id: int, db: AsyncSession = Depends(get_db)):
             "table_id": table.id if table else None,
             "table_number": table.number if table else None,
             "ticket_number": ticket.ticket_number,
-            "waiter_id": order.user_id if order else None,
+            "waiter_id": waiter_id,
             "waiter_name": waiter_name,
+            "is_delivery": is_delivery,
+            "delivery_info": {
+                "customer_name": order_extra.get("customer_name", ""),
+                "customer_phone": order_extra.get("customer_phone", ""),
+                "customer_address": order_extra.get("customer_address", ""),
+            } if is_delivery else None,
             "items": snapshot,
             "created_at": now.isoformat(),
         },
     }
-    await manager.broadcast_to_room("kitchen", payload)
-    await manager.broadcast_to_room("bar", payload)
-    await manager.broadcast_to_room("global", payload)
+    await manager.broadcast_to_room("kitchen", ws_payload)
+    await manager.broadcast_to_room("bar", ws_payload)
+    await manager.broadcast_to_room("global", ws_payload)
+
 
     return ticket
 

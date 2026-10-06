@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useContext } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { AuthContext } from '../contexts/AuthContext'
 import {
-    getOrder, createOrder, addOrderItems, sendToKitchen, closeOrder, cancelOrder,
+    getOrder, createOrder, updateOrder, addOrderItems, sendToKitchen, closeOrder, cancelOrder,
     getCategories, getProducts, updateTable, updateItemStatus, unmergeTables, getTables,
     previewBilling, printReceipt, getCreams, updateOrderItem, deleteOrderItem
 } from '../api/client'
@@ -11,11 +11,13 @@ import { useWebSocket } from '../hooks/useWebSocket'
 import api from '../api/client'
 
 /**
- * Panel de Comanda (Add-on) para una mesa.
+ * Panel de Comanda (Add-on) para una mesa o pedido delivery.
  * Permite añadir ítems en cualquier momento y enviarlos a cocina.
  */
 export default function OrderPanel() {
     const { tableId } = useParams()
+    const [searchParams] = useSearchParams()
+    const isDelivery = searchParams.get('delivery') === '1'
     const navigate = useNavigate()
 
     const [order, setOrder] = useState(null)
@@ -129,11 +131,31 @@ export default function OrderPanel() {
     // ── Cargar / crear orden ──────────────────────────────────────────────────
     const loadOrCreateOrder = useCallback(async () => {
         try {
+            // ── MODO DELIVERY: tableId es en realidad el orderId ──────────────
+            if (isDelivery) {
+                const existing = await getOrder(parseInt(tableId))
+                if (existing?.data) {
+                    setOrder(existing.data)
+                }
+                setLoading(false)
+                return
+            }
+
             // Obtener orden activa de la mesa
             const res = await api.get(`/orders/active/${tableId}`)
             if (res?.data) {
                 // Fetch de la orden completa para traer todos los items con sus detalles frescos
                 const existing = await getOrder(res.data.id)
+                if (user?.id && existing?.data) {
+                    const isMozo = ['Mozo', 'MOZO'].includes(user.role)
+                    const hasNoItems = (existing.data.items || []).length === 0
+                    if ((hasNoItems || isMozo) && existing.data.user_id !== user.id) {
+                        try {
+                            await updateOrder(existing.data.id, { user_id: user.id })
+                            existing.data.user_id = user.id
+                        } catch (e) { }
+                    }
+                }
                 setOrder(existing.data)
                 return
             }
@@ -149,6 +171,12 @@ export default function OrderPanel() {
                             const res = await api.get(`/orders/active/${tableId}`)
                             if (res?.data) {
                                 const existing = await getOrder(res.data.id)
+                                if (user?.id && existing?.data && (existing.data.items || []).length === 0) {
+                                    try {
+                                        await updateOrder(existing.data.id, { user_id: user.id })
+                                        existing.data.user_id = user.id
+                                    } catch (e) { }
+                                }
                                 setOrder(existing.data)
                             }
                         } catch (e) {
@@ -170,7 +198,8 @@ export default function OrderPanel() {
         } finally {
             setLoading(false)
         }
-    }, [tableId, user?.id])
+    }, [tableId, user?.id, isDelivery])
+
 
     useEffect(() => { loadOrCreateOrder() }, [loadOrCreateOrder])
 
@@ -350,8 +379,8 @@ export default function OrderPanel() {
             )
             await addOrderItems(activeOrder.id, items)
 
-            // Enviar a cocina → genera ticket WebSocket
-            await sendToKitchen(activeOrder.id)
+            // Enviar a cocina → genera ticket WebSocket registrando el mozo emisor
+            await sendToKitchen(activeOrder.id, { user_id: user?.id })
 
             // Actualizar orden y limpiar carrito
             const { data: updated } = await getOrder(activeOrder.id)
@@ -484,22 +513,34 @@ export default function OrderPanel() {
         <div className="max-w-5xl mx-auto space-y-6">
             {/* Header */}
             <div className="flex items-center gap-4">
-                <button onClick={() => navigate('/')} className="btn-secondary text-sm">← Mesas</button>
+                <button onClick={() => navigate('/')} className="btn-secondary text-sm">← {isDelivery ? 'Inicio' : 'Mesas'}</button>
                 <h1 className="text-xl font-bold text-white flex-1">
-                    🍽️ Mesa #{tableId}
+                    {isDelivery ? (
+                        <span className="flex items-center gap-2">
+                            <span className="bg-orange-600 text-white text-xs font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">🛵 Delivery</span>
+                            <span className="text-orange-300">
+                                {order?.extra?.customer_name || 'Cliente'}
+                            </span>
+                            {order?.extra?.customer_phone && (
+                                <span className="text-sm text-gray-400 font-normal">📞 {order.extra.customer_phone}</span>
+                            )}
+                        </span>
+                    ) : (
+                        <>🍽️ Mesa #{tableId}</>
+                    )}
                     {order && <span className="ml-2 text-sm text-gray-400">Orden #{order.id}</span>}
                 </h1>
                 {order && (
                     <div className="flex gap-2 flex-wrap">
                         <button onClick={handleFreeTable} className="btn-secondary text-sm border-gray-500/50 hover:border-gray-500 hover:text-white" title="Liberar Mesa">
-                            🗑️ Liberar
+                            🗑️ {isDelivery ? 'Cancelar' : 'Liberar'}
                         </button>
-                        {mergedSecondaries.length > 0 && (
+                        {!isDelivery && mergedSecondaries.length > 0 && (
                             <button onClick={handleUnmerge} className="btn-secondary text-sm border-yellow-500/50 hover:border-yellow-500 text-yellow-200" title="Separar mesas unidas">
                                 ⛓ Separar ({mergedSecondaries.length})
                             </button>
                         )}
-                        {order.items?.length > 0 && (
+                        {order.items?.length > 0 && !isDelivery && (
                             <button onClick={handleRequestBill} className="btn-secondary text-sm border-orange-500/50 hover:border-orange-500 text-orange-200">
                                 🔔 Pedir Cuenta
                             </button>
@@ -510,6 +551,15 @@ export default function OrderPanel() {
                     </div>
                 )}
             </div>
+
+            {/* Delivery address banner */}
+            {isDelivery && order?.extra?.customer_address && (
+                <div className="flex items-center gap-2 bg-orange-900/30 border border-orange-700/50 rounded-xl px-4 py-2 text-sm text-orange-200">
+                    <span>📍</span>
+                    <span className="font-medium">Dirección:</span>
+                    <span>{order.extra.customer_address}</span>
+                </div>
+            )}
 
             {/* Payment Modal con Confirmación de Pago */}
             {showPaymentModal && (
@@ -531,8 +581,10 @@ export default function OrderPanel() {
                                 {/* Resumen del cobro */}
                                 <div className="bg-gray-800/80 border border-gray-700/80 rounded-2xl p-4 text-left space-y-2 text-sm">
                                     <div className="flex justify-between text-gray-300">
-                                        <span>Mesa:</span>
-                                        <span className="font-bold text-white">Mesa #{tableId}</span>
+                                        <span>{isDelivery ? 'Tipo:' : 'Mesa:'}</span>
+                                        <span className="font-bold text-white">
+                                            {isDelivery ? `🛵 Delivery (${order?.extra?.customer_name || 'Cliente'})` : `Mesa #${tableId}`}
+                                        </span>
                                     </div>
                                     <div className="flex justify-between text-gray-300">
                                         <span>Método de Pago:</span>
@@ -576,7 +628,7 @@ export default function OrderPanel() {
                                         onClick={handleFinishPayment}
                                         className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-lg font-bold shadow-lg transition-transform active:scale-95"
                                     >
-                                        🏠 Finalizar y Volver a Mesas
+                                        🏠 {isDelivery ? 'Finalizar y Salir' : 'Finalizar y Volver a Mesas'}
                                     </button>
                                 </div>
                             </div>

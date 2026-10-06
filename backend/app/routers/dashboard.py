@@ -6,7 +6,10 @@ from typing import Dict, List, Any
 from datetime import datetime, timezone
 import os
 from pydantic import BaseModel
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 from app.core.config import settings
 from app.db.base import get_db
@@ -300,6 +303,9 @@ Pregunta del Administrador: {req.message}
 
 Respuesta clara, concisa y profesional:
 """
+    if not genai:
+        return {"reply": "La librería google-generativeai no está instalada en el servidor."}
+
     try:
         genai.configure(api_key=gemini_key)
         model = genai.GenerativeModel('gemini-2.5-flash')

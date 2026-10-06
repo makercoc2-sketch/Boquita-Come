@@ -34,6 +34,8 @@ class ReceiptPrintRequest(BaseModel):
     ruc_emisor: str = ""
     razon_social_emisor: str = ""
     direccion_emisor: str = ""
+    telefono_emisor: Optional[str] = ""
+    mensaje_pie: Optional[str] = "¡Gracias por su visita!"
     igv_porcentaje: float = 10.5
     op_gravadas: float = 0.0
     igv: float = 0.0
@@ -41,6 +43,9 @@ class ReceiptPrintRequest(BaseModel):
     items: list = []
     order_id: int = 0
     table_number: Optional[int] = None
+    is_delivery: bool = False
+    delivery_info: Optional[dict] = None
+
 
 
 @router.post("/kitchen-ticket", status_code=200)
@@ -62,16 +67,19 @@ async def print_receipt(payload: ReceiptPrintRequest):
     if not success:
         raise HTTPException(
             status_code=503,
-            detail="No se pudo imprimir el recibo.",
+            detail="No se detectó la impresora Epson en Windows. Por favor instala el controlador oficial (driver) de la TM-T20II.",
         )
     return {"ok": True, "message": "Recibo impreso correctamente."}
 
 
 @router.get("/status")
 async def printer_status():
-    """Verifica si la impresora USB está disponible."""
-    from app.services.printer import ESCPOS_AVAILABLE
+    """Verifica si la impresora está disponible (Windows Spooler o USB)."""
+    from app.services.printer import ESCPOS_AVAILABLE, WIN32PRINT_AVAILABLE
+    win_printer = printer_service.get_windows_printer_name()
     return {
         "escpos_installed": ESCPOS_AVAILABLE,
-        "printer_connected": ESCPOS_AVAILABLE and printer_service._get_printer() is not None,
+        "win32print_installed": WIN32PRINT_AVAILABLE,
+        "windows_printer_detected": win_printer,
+        "printer_connected": win_printer is not None or (ESCPOS_AVAILABLE and printer_service._get_printer() is not None),
     }

@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import TableCard from '../components/TableCard'
-import { getTables, createTable, deleteTable, mergeTables, unmergeTables, getActiveKitchenTickets } from '../api/client'
+import { getTables, createTable, deleteTable, mergeTables, unmergeTables, getActiveKitchenTickets, createDeliveryOrder, getActiveDeliveryOrders } from '../api/client'
 import { AuthContext } from '../contexts/AuthContext'
 import { useContext, useRef } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
 
 export default function TableMap() {
     const [tables, setTables] = useState([])
+    const [deliveryOrders, setDeliveryOrders] = useState([])
     const [loading, setLoading] = useState(true)
     const [mergeMode, setMergeMode] = useState(false)
     const [selected, setSelected] = useState([])   // IDs seleccionadas para merge
@@ -17,6 +18,13 @@ export default function TableMap() {
     const [readyTables, setReadyTables] = useState(new Set())
     const { user } = useContext(AuthContext)
     const navigate = useNavigate()
+
+    // ── Delivery modal state ──────────────────────────────────────────────────
+    const [showDeliveryModal, setShowDeliveryModal] = useState(false)
+    const [deliveryForm, setDeliveryForm] = useState({ customer_name: '', customer_phone: '', customer_address: '' })
+    const [deliveryLoading, setDeliveryLoading] = useState(false)
+
+
 
     const audioRef = useRef(null)
 
@@ -62,14 +70,16 @@ export default function TableMap() {
     const { lastMessage } = useWebSocket(user ? `waiter/${user.id}` : null)
     const { lastMessage: globalMessage } = useWebSocket('global')
 
-    // ── Carga de mesas y tickets ───────────────────────────────────────────────
+    // ── Carga de mesas, delivery y tickets ────────────────────────────────────
     const load = useCallback(async () => {
         try {
-            const [tablesRes, ticketsRes] = await Promise.all([
+            const [tablesRes, ticketsRes, deliveryRes] = await Promise.all([
                 getTables(),
-                getActiveKitchenTickets()
+                getActiveKitchenTickets(),
+                getActiveDeliveryOrders().catch(() => ({ data: [] }))
             ])
             setTables(tablesRes.data)
+            setDeliveryOrders(deliveryRes.data || [])
 
             // Procesar tickets activos para marcar mesas con platos 'COMPLETED'
             const readySet = new Set()
@@ -105,7 +115,7 @@ export default function TableMap() {
         }
     }, [lastMessage])
 
-    // Escuchar WS global para actualizaciones de mesas en tiempo real
+    // Escuchar WS global para actualizaciones de mesas y pedidos delivery en tiempo real
     useEffect(() => {
         if (!globalMessage) return
         if (globalMessage.event === 'table_updated' && globalMessage.table) {
@@ -115,11 +125,17 @@ export default function TableMap() {
                     : t
             ))
         }
-        // Recargar completamente al unir/separar mesas (cambia merged_into)
-        if (globalMessage.event === 'tables_merged' || globalMessage.event === 'tables_unmerged') {
+        // Recargar al haber cambios de delivery o uniones
+        if (
+            globalMessage.event === 'tables_merged' || 
+            globalMessage.event === 'tables_unmerged' ||
+            globalMessage.event === 'new_delivery_order' ||
+            globalMessage.event === 'new_ticket'
+        ) {
             load()
         }
     }, [globalMessage, load])
+
 
     // ── Crear mesa ─────────────────────────────────────────────────────────────
     const handleCreate = async () => {
@@ -179,7 +195,34 @@ export default function TableMap() {
         }
     }
 
+    // ── Crear pedido delivery ───────────────────────────────────────────────────
+    const handleDelivery = async (e) => {
+        e.preventDefault()
+        if (!deliveryForm.customer_name.trim()) {
+            alert('El nombre del cliente es obligatorio.')
+            return
+        }
+        setDeliveryLoading(true)
+        try {
+            const { data } = await createDeliveryOrder({
+                user_id: user?.id,
+                customer_name: deliveryForm.customer_name.trim(),
+                customer_phone: deliveryForm.customer_phone.trim(),
+                customer_address: deliveryForm.customer_address.trim(),
+            })
+            setShowDeliveryModal(false)
+            setDeliveryForm({ customer_name: '', customer_phone: '', customer_address: '' })
+            // Navegar al panel de la orden delivery (usa el order id directamente)
+            navigate(`/order/${data.id}?delivery=1`)
+        } catch (err) {
+            alert(err.response?.data?.detail ?? 'Error al crear pedido delivery.')
+        } finally {
+            setDeliveryLoading(false)
+        }
+    }
+
     // ── Render ─────────────────────────────────────────────────────────────────
+
     if (loading) return (
         <div className="flex items-center justify-center h-64 text-gray-400">Cargando mesas…</div>
     )
@@ -210,10 +253,19 @@ export default function TableMap() {
                         <>
                             <button onClick={handleCreate} className="btn-primary w-full sm:w-auto flex-1 sm:flex-none">+ Nueva Mesa</button>
                             <button onClick={() => setMergeMode(true)} className="btn-secondary w-full sm:w-auto flex-1 sm:flex-none">⛓ Unir Mesas</button>
+                            {['Administrador', 'Sistemas', 'Caja'].includes(user?.role) && (
+                                <button
+                                    onClick={() => setShowDeliveryModal(true)}
+                                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl font-semibold text-sm bg-orange-600 hover:bg-orange-500 text-white transition-all active:scale-95 shadow-md w-full sm:w-auto flex-1 sm:flex-none"
+                                >
+                                    🛵 Nuevo Delivery
+                                </button>
+                            )}
                         </>
                     )}
                 </div>
             </div>
+
 
             {error && (
                 <div className="bg-red-900/40 border border-red-700 text-red-300 rounded-xl px-4 py-3">
@@ -245,13 +297,72 @@ export default function TableMap() {
                 })}
             </div>
 
-            {/* Grid de mesas */}
-            {tables.length === 0 ? (
+            {/* ── Sección de Pedidos Delivery Activos (si hay alguno) ──────── */}
+            {deliveryOrders.length > 0 && (
+                <div className="bg-gray-900/60 border border-orange-500/30 rounded-2xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-base font-bold text-orange-400 flex items-center gap-2">
+                            <span>🛵</span> Pedidos Delivery Activos ({deliveryOrders.length})
+                        </h2>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                        {deliveryOrders.map(deliv => {
+                            const customerName = deliv.extra?.customer_name || 'Cliente'
+                            const customerPhone = deliv.extra?.customer_phone || ''
+                            const customerAddress = deliv.extra?.customer_address || ''
+                            const itemsCount = (deliv.items || []).length
+                            const isSent = deliv.status === 'SENT'
+
+                            return (
+                                <div
+                                    key={deliv.id}
+                                    onClick={() => navigate(`/order/${deliv.id}?delivery=1`)}
+                                    className="p-3.5 rounded-xl border border-orange-600/40 bg-orange-950/20 hover:bg-orange-900/30 transition-all cursor-pointer space-y-2 hover:scale-[1.02] shadow-sm group"
+                                >
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div>
+                                            <span className="font-bold text-white text-base group-hover:text-orange-300">
+                                                {customerName}
+                                            </span>
+                                            {customerPhone && (
+                                                <p className="text-xs text-gray-400">📞 {customerPhone}</p>
+                                            )}
+                                        </div>
+                                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                            isSent ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40' : 'bg-blue-500/20 text-blue-300 border border-blue-500/40'
+                                        }`}>
+                                            {isSent ? 'EN COCINA' : 'ABIERTO'}
+                                        </span>
+                                    </div>
+
+                                    {customerAddress && (
+                                        <p className="text-xs text-gray-300 truncate" title={customerAddress}>
+                                            📍 {customerAddress}
+                                        </p>
+                                    )}
+
+                                    <div className="flex items-center justify-between pt-1 border-t border-gray-800 text-xs text-gray-400">
+                                        <span>{itemsCount} {itemsCount === 1 ? 'plato' : 'platos'}</span>
+                                        <span className="font-bold text-white">S/ {Number(deliv.subtotal || 0).toFixed(2)}</span>
+                                    </div>
+                                </div>
+                            )
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* Grid de mesas — excluye la mesa virtual de delivery (number=0) */}
+            {tables.filter(t => t.number !== 0).length === 0 ? (
+
                 <div className="card p-12 text-center text-gray-500">
                     No hay mesas. Crea la primera con el botón de arriba.
                 </div>
             ) : (() => {
-                const filteredTables = filterStatus ? tables.filter(t => t.status === filterStatus) : tables;
+                const filteredTables = (filterStatus
+                    ? tables.filter(t => t.status === filterStatus)
+                    : tables
+                ).filter(t => t.number !== 0);  // ocultar mesa virtual delivery
 
                 if (filteredTables.length === 0) {
                     return (
@@ -293,6 +404,67 @@ export default function TableMap() {
                     </div>
                 )
             })()}
+
+            {/* ── Modal Nuevo Delivery ─────────────────────────────────────── */}
+            {showDeliveryModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="card w-full max-w-md p-6 space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                                🛵 <span>Nuevo Pedido Delivery</span>
+                            </h2>
+                            <button onClick={() => { setShowDeliveryModal(false); setDeliveryForm({ customer_name: '', customer_phone: '', customer_address: '' }) }}
+                                className="text-gray-400 hover:text-white text-xl leading-none">✕</button>
+                        </div>
+                        <form onSubmit={handleDelivery} className="space-y-3">
+                            <div>
+                                <label className="block text-sm text-gray-300 font-semibold mb-1">Nombre del cliente *</label>
+                                <input
+                                    type="text"
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white placeholder-gray-500 font-medium focus:border-brand-500 focus:outline-none"
+                                    placeholder="Ej: Juan Pérez"
+                                    value={deliveryForm.customer_name}
+                                    onChange={e => setDeliveryForm(f => ({ ...f, customer_name: e.target.value }))}
+                                    required
+                                    autoFocus
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-gray-300 font-semibold mb-1">Teléfono</label>
+                                <input
+                                    type="tel"
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white placeholder-gray-500 font-medium focus:border-brand-500 focus:outline-none"
+                                    placeholder="Ej: 987654321"
+                                    value={deliveryForm.customer_phone}
+                                    onChange={e => setDeliveryForm(f => ({ ...f, customer_phone: e.target.value }))}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-gray-300 font-semibold mb-1">Dirección de entrega</label>
+                                <input
+                                    type="text"
+                                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-3.5 py-2.5 text-white placeholder-gray-500 font-medium focus:border-brand-500 focus:outline-none"
+                                    placeholder="Ej: Av. Lima 123, Miraflores"
+                                    value={deliveryForm.customer_address}
+                                    onChange={e => setDeliveryForm(f => ({ ...f, customer_address: e.target.value }))}
+                                />
+                            </div>
+
+                            <div className="flex gap-3 pt-2">
+                                <button type="submit" className="btn-primary flex-1" disabled={deliveryLoading}>
+                                    {deliveryLoading ? 'Creando…' : '✓ Crear Pedido'}
+                                </button>
+                                <button type="button"
+                                    onClick={() => { setShowDeliveryModal(false); setDeliveryForm({ customer_name: '', customer_phone: '', customer_address: '' }) }}
+                                    className="btn-secondary flex-1">
+                                    Cancelar
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }
+

@@ -13,6 +13,7 @@ Endpoints:
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pydantic import BaseModel
@@ -49,6 +50,8 @@ class BillingDocument(BaseModel):
     ruc_emisor: str
     razon_social_emisor: str
     direccion_emisor: str
+    telefono_emisor: Optional[str] = ""
+    mensaje_pie: Optional[str] = "¡Gracias por su visita!"
 
     # Datos del receptor (cliente)
     tipo_doc_receptor: Optional[str] = "1"  # 1=DNI, 6=RUC
@@ -67,6 +70,9 @@ class BillingDocument(BaseModel):
     # Referencia interna
     order_id: int
     table_number: Optional[int] = None
+    is_delivery: bool = False
+    delivery_info: Optional[dict] = None
+
 
 
 # ─── Lógica de cálculo ────────────────────────────────────────────────────────
@@ -128,7 +134,19 @@ async def _build_document(order_id: int, tipo_doc: str, db: AsyncSession) -> Bil
             detail="La orden debe estar enviada o pagada para facturar.",
         )
 
-    igv_pct = Decimal(str(settings.IGV_PERCENTAGE))
+    # Cargar datos configurados del negocio desde la base de datos
+    from app.models.setting import SystemSetting
+    result_s = await db.execute(select(SystemSetting).limit(1))
+    db_setting = result_s.scalar_one_or_none()
+
+    business_name = db_setting.business_name if db_setting else settings.BUSINESS_NAME
+    business_ruc = db_setting.business_ruc if db_setting else settings.BUSINESS_RUC
+    business_address = db_setting.business_address if db_setting else settings.BUSINESS_ADDRESS
+    business_phone = db_setting.business_phone if db_setting else ""
+    igv_val = db_setting.igv_percentage if db_setting else settings.IGV_PERCENTAGE
+    receipt_footer = (db_setting.receipt_footer if db_setting and db_setting.receipt_footer else "¡Gracias por su visita!")
+
+    igv_pct = Decimal(str(igv_val))
     total_decimal = Decimal("0.00")
     billing_items: List[BillingItem] = []
 
@@ -161,20 +179,33 @@ async def _build_document(order_id: int, tipo_doc: str, db: AsyncSession) -> Bil
     correlativo = str(order_id).zfill(8)
 
     table = await db.get(__import__("app.models.table", fromlist=["Table"]).Table, order.table_id)
+    order_extra = order.extra if isinstance(order.extra, dict) else {}
+    is_delivery = order_extra.get("order_type") == "delivery"
+    customer_name = order_extra.get("customer_name") if is_delivery else "CLIENTE FINAL"
 
     return BillingDocument(
         tipo_doc=tipo_doc,
         serie="B001" if tipo_doc == "03" else "F001",
         correlativo=correlativo,
         fecha_emision=now.strftime("%Y-%m-%d"),
-        ruc_emisor=settings.BUSINESS_RUC,
-        razon_social_emisor=settings.BUSINESS_NAME,
-        direccion_emisor=settings.BUSINESS_ADDRESS,
+        ruc_emisor=business_ruc,
+        razon_social_emisor=business_name,
+        direccion_emisor=business_address,
+        telefono_emisor=business_phone,
+        mensaje_pie=receipt_footer,
+        razon_social_receptor=customer_name or "CLIENTE FINAL",
         igv_porcentaje=float(igv_pct),
         op_gravadas=float(base_imponible),
         igv=float(igv_monto),
         total=float(total_decimal),
         items=billing_items,
         order_id=order_id,
-        table_number=table.number if table else None,
+        table_number=table.number if table and not is_delivery else None,
+        is_delivery=is_delivery,
+        delivery_info={
+            "customer_name": order_extra.get("customer_name", ""),
+            "customer_phone": order_extra.get("customer_phone", ""),
+            "customer_address": order_extra.get("customer_address", ""),
+        } if is_delivery else None,
     )
+

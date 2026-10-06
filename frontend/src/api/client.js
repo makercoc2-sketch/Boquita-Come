@@ -29,16 +29,20 @@ export const unmergeTables = (primaryId) => api.post(`/tables/unmerge/${primaryI
 
 // ── Orders ───────────────────────────────────────────────────────────────────
 export const createOrder = (data) => api.post('/orders/', data)
+export const createDeliveryOrder = (data) => api.post('/orders/delivery', data)
+export const getActiveDeliveryOrders = () => api.get('/orders/delivery/active')
 export const getOrder = (id) => api.get(`/orders/${id}`)
+export const updateOrder = (id, data) => api.patch(`/orders/${id}`, data)
 export const cancelOrder = (id) => api.delete(`/orders/${id}`)
 export const addOrderItems = (id, items) => api.post(`/orders/${id}/items`, items)
-export const sendToKitchen = (id) => api.post(`/orders/${id}/send-kitchen`)
+export const sendToKitchen = (id, data = {}) => api.post(`/orders/${id}/send-kitchen`, data)
 export const closeOrder = (id, data) => api.post(`/orders/${id}/close`, data)
 export const getActiveKitchenTickets = () => api.get('/orders/kitchen-tickets/active')
 export const getTodayKitchenTickets = () => api.get('/orders/kitchen-tickets/today')
 export const updateItemStatus = (itemId, status) => api.patch(`/orders/items/${itemId}/status`, { status })
 export const updateOrderItem = (itemId, data) => api.put(`/orders/items/${itemId}`, data)
 export const deleteOrderItem = (itemId, userRole) => api.delete(`/orders/items/${itemId}`, { params: { user_role: userRole } })
+
 
 // ── Billing ──────────────────────────────────────────────────────────────────
 export const previewBilling = (orderId) => api.get(`/billing/${orderId}/preview`)
@@ -79,5 +83,10 @@ export const importDatabaseBackup = (formData, role) => {
         headers: { 'Content-Type': 'multipart/form-data' }
     })
 }
+
+// ── Configuración / Ajustes ──────────────────────────────────────────────────
+export const getSettings = () => api.get('/settings/')
+export const updateSettings = (data) => api.put('/settings/', data)
+export const testPrintSettings = () => api.post('/settings/test-print')
 
 export default api

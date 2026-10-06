@@ -550,21 +550,40 @@ function KitchenTicketCard({ ticket, onDismiss, onItemStatusChange, isHistory = 
     const isAllCompleted = chunkItems.every(it => it.status === 'COMPLETED' || it.status === 'DELIVERED')
 
     return (
-        <div className={`card ${isTv ? 'p-2.5 space-y-2 text-xs' : 'p-4 space-y-3'} animate-[fadeIn_0.3s_ease-out] transition-all duration-300 ${isAllCompleted ? 'ring-2 ring-green-500 bg-green-900/15' : ''}`}>
+        <div className={`card ${isTv ? 'p-2.5 space-y-2 text-xs' : 'p-4 space-y-3'} animate-[fadeIn_0.3s_ease-out] transition-all duration-300 ${isAllCompleted ? 'ring-2 ring-green-500 bg-green-900/15' : ''} ${ticket.is_delivery ? 'ring-2 ring-orange-600/70 bg-orange-950/10' : ''}`}>
             {/* Cabecera del ticket */}
             <div className="flex items-start justify-between">
                 <div>
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">Mesa</p>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className={`${isTv ? 'text-2xl' : 'text-3xl'} font-black ${isAllCompleted ? 'text-green-400' : 'text-white'}`}>
-                            {ticket.table_number ?? '?'}
-                        </span>
-                        {ticket.total_chunks > 1 && (
-                            <span className="text-amber-400 font-black text-xs sm:text-sm bg-amber-950/90 px-2 py-0.5 rounded-md border border-amber-500/50 shadow-sm">
-                                ({ticket.chunk_index + 1}/{ticket.total_chunks})
-                            </span>
-                        )}
-                    </div>
+                    {ticket.is_delivery ? (
+                        <>
+                            <p className="text-[10px] text-orange-400 uppercase tracking-wide font-semibold">🛵 Delivery</p>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`${isTv ? 'text-base' : 'text-xl'} font-black ${isAllCompleted ? 'text-green-400' : 'text-orange-300'}`}>
+                                    {ticket.delivery_info?.customer_name || 'Cliente'}
+                                </span>
+                            </div>
+                            {ticket.delivery_info?.customer_phone && (
+                                <span className="text-[10px] text-gray-400">📞 {ticket.delivery_info.customer_phone}</span>
+                            )}
+                            {ticket.delivery_info?.customer_address && (
+                                <p className="text-[10px] text-orange-300/80 mt-0.5">📍 {ticket.delivery_info.customer_address}</p>
+                            )}
+                        </>
+                    ) : (
+                        <>
+                            <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">Mesa</p>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`${isTv ? 'text-2xl' : 'text-3xl'} font-black ${isAllCompleted ? 'text-green-400' : 'text-white'}`}>
+                                    {ticket.table_number ?? '?'}
+                                </span>
+                                {ticket.total_chunks > 1 && (
+                                    <span className="text-amber-400 font-black text-xs sm:text-sm bg-amber-950/90 px-2 py-0.5 rounded-md border border-amber-500/50 shadow-sm">
+                                        ({ticket.chunk_index + 1}/{ticket.total_chunks})
+                                    </span>
+                                )}
+                            </div>
+                        </>
+                    )}
                     {ticket.waiter_name && (
                         <span className={`inline-flex items-center gap-1 ${isTv ? 'text-[10px] px-1.5 py-0.5' : 'text-xs px-2 py-0.5'} font-bold text-brand-300 bg-brand-950/80 border border-brand-700/60 rounded-lg mt-0.5 shadow-sm`}>
                             <span>👤</span> {ticket.waiter_name}
@@ -572,6 +591,12 @@ function KitchenTicketCard({ ticket, onDismiss, onItemStatusChange, isHistory = 
                     )}
                 </div>
                 <div className="text-right">
+                    {ticket.is_delivery && (
+                        <span className="inline-block bg-orange-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wide mb-1">
+                            DELIVERY
+                        </span>
+                    )}
+                    {!ticket.is_delivery && ticket.total_chunks > 1 && <div />}
                     <p className="text-[10px] text-gray-400 font-medium">Ticket #{ticket.ticket_number}</p>
                     <p className={`${isTv ? 'text-xs' : 'text-sm'} text-gray-300 font-bold`}>{time}</p>
                 </div>

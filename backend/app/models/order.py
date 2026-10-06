@@ -139,13 +139,18 @@ class KitchenTicket(Base):
         index=True,
     )
     ticket_number = sa.Column(sa.Integer, nullable=False, default=1)
-    # Snapshot: [{"product": "Lomo Saltado", "qty": 2, "notes": "sin cebolla", "modifiers": [...]}]
+    user_id = sa.Column(
+        sa.Integer,
+        sa.ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     items_snapshot = sa.Column(JSON, nullable=False)
     printed_at = sa.Column(sa.DateTime(timezone=True), nullable=True)
     created_at = sa.Column(sa.DateTime(timezone=True), server_default=sa.func.now())
 
     # Relaciones
     order = sa.orm.relationship("Order", back_populates="kitchen_tickets")
+    user = sa.orm.relationship("User", lazy="selectin")
 
     def __repr__(self) -> str:
         return f"<KitchenTicket id={self.id} order_id={self.order_id} ticket_number={self.ticket_number}>"

@@ -10,6 +10,7 @@ import Finances from './pages/Finances'
 import Dashboard from './pages/Dashboard'
 import OrderPanel from './pages/OrderPanel'
 import Login from './pages/Login'
+import Settings from './pages/Settings'
 import GlobalNotifications from './components/GlobalNotifications'
 
 export default function App() {
@@ -60,6 +61,7 @@ export default function App() {
                     {navLink('/users', '👥 Usuarios', ['Administrador', 'Sistemas'])}
                     {navLink('/dashboard', '📊 Dashboard', ['Administrador'])}
                     {navLink('/finances', '📈 Finanzas', ['Administrador'])}
+                    {navLink('/settings', '⚙️ Configuración', ['Administrador', 'Sistemas'])}
                 </div>
                 <div className="flex items-center gap-3 sm:gap-4">
                     <span className="text-gray-400 text-sm hidden lg:inline-block">
@@ -104,6 +106,9 @@ export default function App() {
                     )}
                     {(['Administrador'].includes(user.role)) && (
                         <Route path="/dashboard" element={<Dashboard />} />
+                    )}
+                    {(['Administrador', 'Sistemas'].includes(user.role)) && (
+                        <Route path="/settings" element={<Settings />} />
                     )}
                     <Route path="*" element={<Navigate to="/" />} />
                 </Routes>

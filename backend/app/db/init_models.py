@@ -8,3 +8,4 @@ from app.models.split_bill import SplitBill  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.expense import Expense, ExpenseType  # noqa: F401
 from app.models.cream import Cream  # noqa: F401
+from app.models.setting import SystemSetting  # noqa: F401

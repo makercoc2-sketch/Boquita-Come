@@ -88,6 +88,21 @@ async def list_tables(db: AsyncSession = Depends(get_db)):
             if table.status == TableStatus.OCCUPIED and not table.merged_into:
                 table.status = TableStatus.FREE
                 table_changed = True
+            
+            # Limpiar órdenes vacías huérfanas de mesas físicas (sin ítems) que hayan quedado abiertas
+            # Excluimos la mesa virtual de delivery (number == 0) para que no borre órdenes delivery recién creadas
+            if table.number != 0:
+                empty_orders_res = await db.execute(
+                    select(Order).where(
+                        Order.table_id == table.id,
+                        Order.status == OrderStatus.OPEN
+                    )
+                )
+                for eo in empty_orders_res.scalars().all():
+                    if not eo.items:
+                        await db.delete(eo)
+                        table_changed = True
+
 
 
     if table_changed:

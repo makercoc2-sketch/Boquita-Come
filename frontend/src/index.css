@@ -32,6 +32,14 @@
     @apply bg-gray-900 rounded-2xl border border-gray-800/60 shadow-xl;
   }
 
+  /* ── Form Inputs ─────────────────────────────────────────────── */
+  .input {
+    @apply bg-gray-950 border border-gray-800 rounded-xl px-3.5 py-2.5
+           text-white placeholder-gray-500 font-medium
+           focus:border-brand-500 focus:outline-none transition-colors;
+  }
+
+
   /* ── Badge de estado de mesa ──────────────────────────────────── */
   .status-free     { @apply bg-status-free/20     text-status-free     border-status-free/50; }
   .status-occupied { @apply bg-status-occupied/20 text-status-occupied border-status-occupied/50; }

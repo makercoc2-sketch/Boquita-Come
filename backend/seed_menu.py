@@ -183,7 +183,7 @@ async def seed():
                     prod_count += 1
         
         await session.commit()
-        print(f"✅ Éxito: {user_count} usuarios, {table_count} mesas, {len(categories_data)} categorías y {prod_count} productos cargados.")
+        print(f"[OK] {user_count} usuarios, {table_count} mesas, {len(categories_data)} categorias y {prod_count} productos cargados.")
 
 if __name__ == "__main__":
     asyncio.run(seed())
