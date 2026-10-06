@@ -1,0 +1,29 @@
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+.pnpm-debug.log*
+
+# Python / Backend
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Database & Uploads
+*.db
+*.sqlite
+*.sqlite3
+backend/boquita_come.db
+boquita_come.db
+
+# Environment & IDE
+.env
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

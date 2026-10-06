@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-950 text-gray-100 font-sans antialiased;
+  }
+}
+
+@layer components {
+  /* ── Botones ─────────────────────────────────────────────────── */
+  .btn-primary {
+    @apply bg-brand-600 hover:bg-brand-700 active:scale-95
+           text-white font-semibold px-4 py-2 rounded-xl
+           transition-all duration-150 shadow-lg shadow-brand-900/40
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-gray-800 hover:bg-gray-700 active:scale-95
+           text-gray-200 font-medium px-4 py-2 rounded-xl
+           transition-all duration-150 border border-gray-700;
+  }
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-700 active:scale-95
+           text-white font-semibold px-4 py-2 rounded-xl
+           transition-all duration-150;
+  }
+
+  /* ── Cards ───────────────────────────────────────────────────── */
+  .card {
+    @apply bg-gray-900 rounded-2xl border border-gray-800/60 shadow-xl;
+  }
+
+  /* ── Badge de estado de mesa ──────────────────────────────────── */
+  .status-free     { @apply bg-status-free/20     text-status-free     border-status-free/50; }
+  .status-occupied { @apply bg-status-occupied/20 text-status-occupied border-status-occupied/50; }
+  .status-reserved { @apply bg-status-reserved/20 text-status-reserved border-status-reserved/50; }
+  .status-topay    { @apply bg-status-topay/20    text-status-topay    border-status-topay/50; }
+}
