@@ -24,10 +24,38 @@ async def lifespan(app: FastAPI):
     logger.info(f"   DB: {settings.DATABASE_URL.split('@')[-1]}")
     logger.info(f"   CORS origins: {settings.CORS_ORIGINS}")
     
-    # Asegurar que todas las tablas existan en SQLite al iniciar
+    # Asegurar que todas las tablas y columnas existan en SQLite al iniciar
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        def migrate_missing_columns(connection):
+            for table_name, table in Base.metadata.tables.items():
+                res = connection.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall()
+                existing_cols = {row[1] for row in res}
+                for col in table.columns:
+                    if col.name not in existing_cols:
+                        col_type = col.type.compile(connection.dialect)
+                        connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {col.name} {col_type}")
+                        logger.info(f"Columna agregada automáticamente: {table_name}.{col.name}")
+        await conn.run_sync(migrate_missing_columns)
     logger.info("✅ Tablas de la base de datos verificadas/creadas.")
+
+    # Asegurar existencia de mesa virtual de delivery (número 0)
+    from app.db.base import AsyncSessionLocal
+    from app.models.table import Table, TableStatus
+    from sqlalchemy import select
+    async with AsyncSessionLocal() as db:
+        deliv_res = await db.execute(select(Table).where(Table.number == 0))
+        if not deliv_res.scalar_one_or_none():
+            delivery_table = Table(
+                number=0,
+                name="Delivery / Para Llevar",
+                capacity=1,
+                status=TableStatus.FREE,
+            )
+            db.add(delivery_table)
+            await db.commit()
+            logger.info("Mesa virtual de delivery asegurada (número 0).")
     
     yield
     logger.info("🛑 Servidor detenido. Cerrando conexiones...")

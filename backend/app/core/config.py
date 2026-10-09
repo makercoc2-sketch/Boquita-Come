@@ -1,5 +1,9 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
+
+_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_DB = (_BACKEND_DIR / "boquita_come.db").as_posix()
 
 
 class Settings(BaseSettings):
@@ -10,7 +14,7 @@ class Settings(BaseSettings):
     )
 
     # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./boquita_come.db"
+    DATABASE_URL: str = f"sqlite+aiosqlite:///{_DEFAULT_DB}"
 
     # Server
     SERVER_HOST: str = "0.0.0.0"
