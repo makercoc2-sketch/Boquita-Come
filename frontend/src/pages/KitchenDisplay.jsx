@@ -566,12 +566,6 @@ function KitchenTicketCard({ ticket, onDismiss, onItemStatusChange, isHistory = 
                                     {ticket.delivery_info?.customer_name || 'Cliente'}
                                 </span>
                             </div>
-                            {ticket.delivery_info?.customer_phone && (
-                                <span className="text-[10px] text-gray-400">📞 {ticket.delivery_info.customer_phone}</span>
-                            )}
-                            {ticket.delivery_info?.customer_address && (
-                                <p className="text-[10px] text-orange-300/80 mt-0.5">📍 {ticket.delivery_info.customer_address}</p>
-                            )}
                         </>
                     ) : (
                         <>
