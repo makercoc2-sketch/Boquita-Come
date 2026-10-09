@@ -15,8 +15,8 @@ export default function BarDisplay() {
     const [sortOrder, setSortOrder] = useState('asc') // 'asc': más antiguo a más reciente (predeterminado) | 'desc': más reciente a más antiguo
     const [viewMode, setViewMode] = useState(() => localStorage.getItem('bar_view_mode') || 'tv') // 'tv' (Compacto para TV 24") | 'normal'
     const [isKiosk, setIsKiosk] = useState(false)
-    const [autoDismiss, setAutoDismiss] = useState(false)
-    const [autoScroll, setAutoScroll] = useState(() => localStorage.getItem('kds_auto_scroll') === 'true')
+    const [autoDismiss, setAutoDismiss] = useState(() => localStorage.getItem('bar_auto_dismiss') !== 'false')
+    const [autoScroll, setAutoScroll] = useState(() => localStorage.getItem('kds_auto_scroll') !== 'false')
     const [flashItemIds, setFlashItemIds] = useState([])
 
     const [dismissedChunkKeys, setDismissedChunkKeys] = useState([])
@@ -441,7 +441,11 @@ export default function BarDisplay() {
 
                     {/* Toggle auto-ocultar */}
                     <button
-                        onClick={() => setAutoDismiss(prev => !prev)}
+                        onClick={() => {
+                            const next = !autoDismiss
+                            setAutoDismiss(next)
+                            localStorage.setItem('bar_auto_dismiss', String(next))
+                        }}
                         className={`px-3 py-1.5 rounded-xl font-bold transition-all border flex items-center gap-1.5 ${autoDismiss
                             ? 'bg-green-600 border-green-500 text-white shadow-md'
                             : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
