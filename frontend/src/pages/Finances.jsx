@@ -139,7 +139,11 @@ export default function Finances() {
             (String(order.id).includes(query)) ||
             (String(order.table_number).includes(query))
         )
-        const matchesMethod = methodFilter === 'ALL' || order.payment_method === methodFilter
+        const matchesMethod = methodFilter === 'ALL'
+            ? true
+            : methodFilter === 'Pago Mixto'
+            ? (order.payment_method?.includes('+') || order.payment_method?.includes('Mixto') || (order.payments && order.payments.length > 1))
+            : (order.payment_method?.toLowerCase().includes(methodFilter.toLowerCase()))
         return matchesQuery && matchesMethod
     })
 
@@ -359,7 +363,7 @@ export default function Finances() {
 
                                     {/* Filtro por método de pago */}
                                     <div className="flex items-center gap-1.5 flex-wrap text-xs">
-                                        {['ALL', 'Efectivo', 'Yape / Plin', 'POS / Tarjeta'].map((method) => (
+                                        {['ALL', 'Efectivo', 'Yape / Plin', 'POS / Tarjeta', 'Pago Mixto'].map((method) => (
                                             <button
                                                 key={method}
                                                 onClick={() => setMethodFilter(method)}
@@ -441,13 +445,25 @@ export default function Finances() {
                                                                         ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-400'
                                                                         : order.payment_method === 'Yape / Plin'
                                                                         ? 'bg-purple-950/40 border-purple-700/50 text-purple-400'
-                                                                        : 'bg-blue-950/40 border-blue-700/50 text-blue-400'
+                                                                        : order.payment_method === 'POS / Tarjeta'
+                                                                        ? 'bg-blue-950/40 border-blue-700/50 text-blue-400'
+                                                                        : 'bg-amber-950/40 border-amber-700/50 text-amber-300'
                                                                 }`}>
                                                                     {order.payment_method === 'Efectivo' && '💵'}
                                                                     {order.payment_method === 'Yape / Plin' && '📲'}
                                                                     {order.payment_method === 'POS / Tarjeta' && '💳'}
+                                                                    {(order.payment_method?.includes('+') || order.payment_method?.includes('Mixto')) && '🔄'}
                                                                     <span>{order.payment_method}</span>
                                                                 </span>
+                                                                {order.payments && order.payments.length > 1 && (
+                                                                    <div className="flex flex-wrap gap-1 mt-1.5">
+                                                                        {order.payments.map((p, idx) => (
+                                                                            <span key={idx} className="text-[10px] bg-gray-800 text-gray-300 px-1.5 py-0.5 rounded border border-gray-700 font-mono">
+                                                                                {p.method}: S/ {Number(p.amount).toFixed(2)}
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
                                                             </td>
                                                             <td className="py-3.5 px-3">
                                                                 <button

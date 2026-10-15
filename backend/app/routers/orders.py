@@ -59,8 +59,15 @@ class DeliveryOrderCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class PaymentItem(BaseModel):
+    method: str
+    amount: float
+    reference: Optional[str] = None
+
+
 class OrderClose(BaseModel):
-    payment_method: str = Field(..., description="Efectivo, Tarjeta, Yape, etc.")
+    payment_method: Optional[str] = Field("Efectivo", description="Efectivo, Tarjeta, Yape, etc. O descripción de pago mixto")
+    payments: Optional[List[PaymentItem]] = None
 
 
 class OrderItemOut(BaseModel):
@@ -793,10 +800,26 @@ async def close_order(order_id: int, payload: OrderClose, db: AsyncSession = Dep
 
     order.status = OrderStatus.PAID
     
-    # Store payment method in the extra JSON field
+    # Store payment method and payments in the extra JSON field
     from typing import cast, Any
     extra_data = cast(dict[str, Any], order.extra) if isinstance(order.extra, dict) else {}
-    extra_data["payment_method"] = payload.payment_method
+    
+    if payload.payments and len(payload.payments) > 0:
+        extra_data["payments"] = [p.model_dump() for p in payload.payments]
+        if len(payload.payments) > 1:
+            method_str = " + ".join([p.method for p in payload.payments])
+            extra_data["payment_method"] = payload.payment_method if (payload.payment_method and payload.payment_method != "Efectivo") else method_str
+        else:
+            extra_data["payment_method"] = payload.payments[0].method
+    else:
+        extra_data["payment_method"] = payload.payment_method or "Efectivo"
+        # Calcular total de ítems para guardar pago único coherente
+        from sqlalchemy import select as sa_select
+        from app.models.order import OrderItem
+        res_items = await db.execute(sa_select(OrderItem).where(OrderItem.order_id == order.id))
+        order_total = sum(float(i.price_at_time * i.quantity) for i in res_items.scalars().all())
+        extra_data["payments"] = [{"method": extra_data["payment_method"], "amount": order_total}]
+
     order.extra = extra_data
     
     # Marcar como PAID cualquier otra orden activa que hubiese quedado huérfana en la misma mesa

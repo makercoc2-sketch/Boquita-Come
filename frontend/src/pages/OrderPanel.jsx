@@ -110,6 +110,11 @@ export default function OrderPanel() {
     const [printingReceipt, setPrintingReceipt] = useState(false)
     const [showFreeModal, setShowFreeModal] = useState(false)
     const [mergedSecondaries, setMergedSecondaries] = useState([])
+    // Estados para Pago Mixto / Múltiples Métodos
+    const [splitPayments, setSplitPayments] = useState([])
+    const [currentSplitMethod, setCurrentSplitMethod] = useState('Efectivo')
+    const [currentSplitAmount, setCurrentSplitAmount] = useState('')
+    const [currentSplitRef, setCurrentSplitRef] = useState('')
 
 
     const { user } = useContext(AuthContext)
@@ -426,6 +431,10 @@ export default function OrderPanel() {
         setSelectedPaymentMethod(null)
         setCashReceived('')
         setPaymentRef('')
+        setSplitPayments([])
+        setCurrentSplitMethod('Efectivo')
+        setCurrentSplitAmount(sentTotal.toFixed(2))
+        setCurrentSplitRef('')
         setPaymentSuccessData(null)
     }
 
@@ -433,22 +442,121 @@ export default function OrderPanel() {
         setSelectedPaymentMethod(method)
         if (method === 'Efectivo') {
             setCashReceived(sentTotal.toFixed(2))
+        } else if (method === 'Mixto') {
+            setSplitPayments([])
+            setCurrentSplitMethod('Efectivo')
+            setCurrentSplitAmount(sentTotal.toFixed(2))
+            setCurrentSplitRef('')
         }
+    }
+
+    // Convertir pago en efectivo insuficiente directamente a pago mixto
+    const handleConvertToSplit = () => {
+        const cashVal = parseFloat(cashReceived) || 0
+        const rem = Math.max(0, sentTotal - cashVal)
+        setSelectedPaymentMethod('Mixto')
+        if (cashVal > 0) {
+            setSplitPayments([{
+                id: Date.now(),
+                method: 'Efectivo',
+                amount: cashVal,
+                ref: ''
+            }])
+        } else {
+            setSplitPayments([])
+        }
+        setCurrentSplitMethod('Yape / Plin')
+        setCurrentSplitAmount(rem > 0 ? rem.toFixed(2) : '')
+        setCurrentSplitRef('')
+    }
+
+    const handleAddSplitPayment = () => {
+        const amt = parseFloat(currentSplitAmount)
+        if (!amt || amt <= 0) {
+            alert('Por favor ingresa un monto válido mayor a 0.')
+            return
+        }
+        const newPayments = [
+            ...splitPayments,
+            {
+                id: Date.now(),
+                method: currentSplitMethod,
+                amount: amt,
+                ref: currentSplitRef.trim()
+            }
+        ]
+        setSplitPayments(newPayments)
+
+        const newTotalPaid = newPayments.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0)
+        const newRemaining = Math.max(0, sentTotal - newTotalPaid)
+
+        // Alternar sugerencia de siguiente método si falta saldo
+        if (currentSplitMethod === 'Efectivo') {
+            setCurrentSplitMethod('Yape / Plin')
+        } else if (currentSplitMethod === 'Yape / Plin') {
+            setCurrentSplitMethod('Tarjeta')
+        }
+        setCurrentSplitAmount(newRemaining > 0 ? newRemaining.toFixed(2) : '')
+        setCurrentSplitRef('')
+    }
+
+    const handleRemoveSplitPayment = (id) => {
+        const filtered = splitPayments.filter(p => p.id !== id)
+        setSplitPayments(filtered)
+        const newTotalPaid = filtered.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0)
+        const newRemaining = Math.max(0, sentTotal - newTotalPaid)
+        setCurrentSplitAmount(newRemaining > 0 ? newRemaining.toFixed(2) : '')
     }
 
     const handleConfirmPayment = async () => {
         if (!order || !selectedPaymentMethod) return
         setSending(true)
         try {
-            const received = selectedPaymentMethod === 'Efectivo' ? (parseFloat(cashReceived) || sentTotal) : sentTotal
-            const change = selectedPaymentMethod === 'Efectivo' ? Math.max(0, received - sentTotal) : 0
+            let paymentsPayload = []
+            let methodLabel = selectedPaymentMethod
+            let received = sentTotal
+            let change = 0
 
-            await closeOrder(order.id, { payment_method: selectedPaymentMethod })
+            if (selectedPaymentMethod === 'Mixto') {
+                const totalInSplits = splitPayments.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0)
+                if (totalInSplits < sentTotal - 0.001) {
+                    alert(`Falta cubrir S/ ${(sentTotal - totalInSplits).toFixed(2)} para completar el total.`)
+                    setSending(false)
+                    return
+                }
+                paymentsPayload = splitPayments.map(p => ({
+                    method: p.method,
+                    amount: parseFloat(p.amount),
+                    reference: p.ref || null
+                }))
+                methodLabel = splitPayments.map(p => p.method).join(' + ')
+            } else if (selectedPaymentMethod === 'Efectivo') {
+                received = parseFloat(cashReceived) || sentTotal
+                change = Math.max(0, received - sentTotal)
+                paymentsPayload = [{
+                    method: 'Efectivo',
+                    amount: sentTotal,
+                    reference: null
+                }]
+            } else {
+                paymentsPayload = [{
+                    method: selectedPaymentMethod,
+                    amount: sentTotal,
+                    reference: paymentRef || null
+                }]
+            }
+
+            await closeOrder(order.id, {
+                payment_method: methodLabel,
+                payments: paymentsPayload
+            })
 
             setPaymentSuccessData({
                 orderId: order.id,
                 tableNumber: tableId,
-                paymentMethod: selectedPaymentMethod,
+                paymentMethod: methodLabel,
+                isMixed: selectedPaymentMethod === 'Mixto',
+                payments: paymentsPayload,
                 paymentRef,
                 total: sentTotal,
                 cashReceived: received,
@@ -615,9 +723,26 @@ export default function OrderPanel() {
                                     </div>
                                     <div className="flex justify-between text-gray-300">
                                         <span>Método de Pago:</span>
-                                        <span className="font-bold text-brand-400">{paymentSuccessData.paymentMethod}</span>
+                                        <span className="font-bold text-brand-400">
+                                            {paymentSuccessData.isMixed ? '🔄 Pago Mixto' : paymentSuccessData.paymentMethod}
+                                        </span>
                                     </div>
-                                    {paymentSuccessData.paymentRef && (
+                                    {paymentSuccessData.isMixed && paymentSuccessData.payments?.length > 0 && (
+                                        <div className="bg-gray-900/80 rounded-xl p-2.5 space-y-1.5 border border-gray-700/60 my-2">
+                                            <span className="text-[11px] text-gray-400 font-bold uppercase block">Desglose de Pago:</span>
+                                            {paymentSuccessData.payments.map((p, idx) => (
+                                                <div key={idx} className="flex justify-between text-xs text-gray-200">
+                                                    <span className="flex items-center gap-1.5">
+                                                        <span>{p.method === 'Efectivo' ? '💵' : p.method === 'Tarjeta' ? '💳' : '📱'}</span>
+                                                        <span>{p.method}</span>
+                                                        {p.reference && <span className="text-gray-400 font-mono text-[10px]">({p.reference})</span>}
+                                                    </span>
+                                                    <span className="font-mono font-bold text-emerald-400">S/ {Number(p.amount).toFixed(2)}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {paymentSuccessData.paymentRef && !paymentSuccessData.isMixed && (
                                         <div className="flex justify-between text-gray-300">
                                             <span>N° Operación:</span>
                                             <span className="font-mono text-white">{paymentSuccessData.paymentRef}</span>
@@ -628,7 +753,7 @@ export default function OrderPanel() {
                                         <span>Total Cobrado:</span>
                                         <span className="text-emerald-400">S/ {paymentSuccessData.total.toFixed(2)}</span>
                                     </div>
-                                    {paymentSuccessData.paymentMethod === 'Efectivo' && (
+                                    {paymentSuccessData.paymentMethod === 'Efectivo' && !paymentSuccessData.isMixed && (
                                         <>
                                             <div className="flex justify-between text-xs text-gray-400">
                                                 <span>Monto Recibido:</span>
@@ -671,22 +796,26 @@ export default function OrderPanel() {
                                     </div>
                                 </div>
 
-                                <div className="grid grid-cols-1 gap-3">
+                                <div className="grid grid-cols-1 gap-2.5">
                                     {[
-                                        { id: 'Efectivo', label: 'Efectivo', icon: '💵', color: 'hover:border-emerald-500' },
-                                        { id: 'Tarjeta', label: 'Tarjeta (POS)', icon: '💳', color: 'hover:border-blue-500' },
-                                        { id: 'Yape / Plin', label: 'Yape / Plin', icon: '📱', color: 'hover:border-purple-500' },
+                                        { id: 'Efectivo', label: 'Efectivo', desc: 'Pago total en efectivo', icon: '💵', color: 'hover:border-emerald-500' },
+                                        { id: 'Tarjeta', label: 'Tarjeta (POS)', desc: 'Pago total con POS o tarjeta', icon: '💳', color: 'hover:border-blue-500' },
+                                        { id: 'Yape / Plin', label: 'Yape / Plin', desc: 'Pago total con billetera digital', icon: '📱', color: 'hover:border-purple-500' },
+                                        { id: 'Mixto', label: 'Pago Mixto / Dividido', desc: 'Combinar Efectivo, Yape y/o Tarjeta', icon: '🔄', color: 'hover:border-amber-500 bg-amber-950/20 border-amber-600/40' },
                                     ].map(method => (
                                         <button
                                             key={method.id}
                                             onClick={() => handleSelectMethod(method.id)}
-                                            className={`w-full py-4 px-5 bg-gray-800 hover:bg-gray-700/80 border border-gray-700 text-white rounded-2xl text-lg font-bold flex items-center justify-between transition-all active:scale-95 ${method.color}`}
+                                            className={`w-full py-3.5 px-4 bg-gray-800 hover:bg-gray-700/80 border border-gray-700 text-white rounded-2xl flex items-center justify-between transition-all active:scale-95 ${method.color}`}
                                         >
-                                            <span className="flex items-center gap-3">
+                                            <span className="flex items-center gap-3 text-left">
                                                 <span className="text-2xl">{method.icon}</span>
-                                                {method.label}
+                                                <div>
+                                                    <p className="font-bold text-sm sm:text-base leading-tight">{method.label}</p>
+                                                    <p className="text-[11px] text-gray-400 font-normal">{method.desc}</p>
+                                                </div>
                                             </span>
-                                            <span className="text-gray-400">→</span>
+                                            <span className="text-gray-400 font-bold">→</span>
                                         </button>
                                     ))}
                                 </div>
@@ -700,7 +829,7 @@ export default function OrderPanel() {
                             </div>
                         ) : (
                             /* PASO 2: DETALLES Y CONFIRMACIÓN DE PAGO RECIBIDO */
-                            <div className="space-y-6">
+                            <div className="space-y-5">
                                 <div className="flex items-center justify-between border-b border-gray-800 pb-3">
                                     <button
                                         onClick={() => setSelectedPaymentMethod(null)}
@@ -708,14 +837,14 @@ export default function OrderPanel() {
                                     >
                                         ← Cambiar método
                                     </button>
-                                    <span className="text-sm font-bold text-brand-400 bg-brand-950/80 px-3 py-1 rounded-full border border-brand-500/30">
-                                        {selectedPaymentMethod}
+                                    <span className="text-xs font-bold text-brand-400 bg-brand-950/80 px-3 py-1 rounded-full border border-brand-500/30">
+                                        {selectedPaymentMethod === 'Mixto' ? '🔄 Pago Mixto' : selectedPaymentMethod}
                                     </span>
                                 </div>
 
                                 <div className="text-center">
                                     <span className="text-xs text-gray-400 uppercase font-semibold">Total a Cobrar</span>
-                                    <h4 className="text-4xl font-black text-white mt-1">S/ {sentTotal.toFixed(2)}</h4>
+                                    <h4 className="text-3xl sm:text-4xl font-black text-white mt-1">S/ {sentTotal.toFixed(2)}</h4>
                                 </div>
 
                                 {/* Si eligió EFECTIVO: Calculadora de Vuelto */}
@@ -751,14 +880,25 @@ export default function OrderPanel() {
                                             ))}
                                         </div>
 
-                                        {/* Vuelto calculado */}
+                                        {/* Vuelto calculado o sugerencia de pago mixto */}
                                         {(() => {
                                             const received = parseFloat(cashReceived) || 0;
                                             const change = received - sentTotal;
                                             if (received < sentTotal) {
+                                                const faltan = (sentTotal - received).toFixed(2);
                                                 return (
-                                                    <div className="bg-red-900/40 border border-red-700 rounded-xl p-3 text-center text-red-300 text-sm font-bold">
-                                                        ⚠️ Faltan S/ {(sentTotal - received).toFixed(2)}
+                                                    <div className="space-y-2">
+                                                        <div className="bg-red-900/40 border border-red-700 rounded-xl p-3 text-center text-red-300 text-sm font-bold">
+                                                            ⚠️ Faltan S/ {faltan}
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleConvertToSplit}
+                                                            className="w-full py-2.5 px-3 bg-amber-600/30 hover:bg-amber-600/50 border border-amber-500/50 text-amber-200 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-sm text-center"
+                                                        >
+                                                            <span>🔄</span>
+                                                            <span>Dividir pago: Abonar S/ {received.toFixed(2)} en efectivo y pagar los S/ {faltan} restantes con Yape o Tarjeta</span>
+                                                        </button>
                                                     </div>
                                                 );
                                             }
@@ -788,12 +928,161 @@ export default function OrderPanel() {
                                     </div>
                                 )}
 
+                                {/* Si eligió PAGO MIXTO / MULTI-MÉTODO */}
+                                {selectedPaymentMethod === 'Mixto' && (() => {
+                                    const totalPaidInSplits = splitPayments.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0)
+                                    const splitRemaining = Math.max(0, sentTotal - totalPaidInSplits)
+                                    const isFullyPaid = totalPaidInSplits >= sentTotal - 0.001
+                                    const progressPct = Math.min(100, Math.round((totalPaidInSplits / (sentTotal || 1)) * 100))
+
+                                    return (
+                                        <div className="space-y-4">
+                                            {/* Barra de progreso de pago */}
+                                            <div className="bg-gray-800/80 border border-gray-700/80 rounded-2xl p-3 space-y-2">
+                                                <div className="flex justify-between items-center text-xs">
+                                                    <span className="text-gray-400 font-semibold uppercase">Total Cubierto:</span>
+                                                    <span className={`font-bold ${isFullyPaid ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                                        S/ {totalPaidInSplits.toFixed(2)} de S/ {sentTotal.toFixed(2)} ({progressPct}%)
+                                                    </span>
+                                                </div>
+                                                <div className="w-full h-2.5 bg-gray-900 rounded-full overflow-hidden border border-gray-700/50">
+                                                    <div
+                                                        className={`h-full transition-all duration-300 ${isFullyPaid ? 'bg-emerald-500' : 'bg-brand-500'}`}
+                                                        style={{ width: `${progressPct}%` }}
+                                                    />
+                                                </div>
+                                                <div className="flex justify-between text-xs pt-0.5">
+                                                    <span className="text-gray-400">Por cobrar:</span>
+                                                    <span className={`font-mono font-bold text-sm ${isFullyPaid ? 'text-emerald-400' : 'text-red-400'}`}>
+                                                        {isFullyPaid ? '✓ Total Cubierto' : `S/ ${splitRemaining.toFixed(2)}`}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            {/* Listado de abonos registrados */}
+                                            <div>
+                                                <span className="text-xs text-gray-400 font-bold uppercase block mb-1.5">
+                                                    Abonos registrados ({splitPayments.length}):
+                                                </span>
+                                                {splitPayments.length === 0 ? (
+                                                    <div className="p-3 bg-gray-800/40 border border-dashed border-gray-700 rounded-xl text-center text-xs text-gray-500">
+                                                        Agrega los métodos y montos abajo para completar el total
+                                                    </div>
+                                                ) : (
+                                                    <ul className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                                                        {splitPayments.map((p) => (
+                                                            <li
+                                                                key={p.id}
+                                                                className="flex items-center justify-between bg-gray-800/90 border border-gray-700/80 rounded-xl p-2.5 text-xs text-white"
+                                                            >
+                                                                <div className="flex items-center gap-2">
+                                                                    <span className="text-base">{p.method === 'Efectivo' ? '💵' : p.method === 'Tarjeta' ? '💳' : '📱'}</span>
+                                                                    <div>
+                                                                        <span className="font-bold text-gray-200">{p.method}</span>
+                                                                        {p.ref && <span className="text-[10px] text-gray-400 ml-1.5 font-mono">Ref: {p.ref}</span>}
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex items-center gap-2.5">
+                                                                    <span className="font-mono font-black text-emerald-400 text-sm">
+                                                                        S/ {Number(p.amount).toFixed(2)}
+                                                                    </span>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleRemoveSplitPayment(p.id)}
+                                                                        className="text-gray-500 hover:text-red-400 p-1 hover:bg-red-950/40 rounded-lg transition-colors"
+                                                                        title="Eliminar este abono"
+                                                                    >
+                                                                        🗑️
+                                                                    </button>
+                                                                </div>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                )}
+                                            </div>
+
+                                            {/* Formulario para agregar siguiente abono */}
+                                            {!isFullyPaid && (
+                                                <div className="bg-gray-800/50 border border-brand-500/30 rounded-2xl p-3.5 space-y-3">
+                                                    <span className="text-xs text-brand-300 font-bold uppercase block">
+                                                        ➕ Agregar Siguiente Abono:
+                                                    </span>
+                                                    
+                                                    {/* Selector de método para el abono */}
+                                                    <div className="grid grid-cols-3 gap-1.5">
+                                                        {[
+                                                            { id: 'Efectivo', icon: '💵', label: 'Efectivo' },
+                                                            { id: 'Yape / Plin', icon: '📱', label: 'Yape' },
+                                                            { id: 'Tarjeta', icon: '💳', label: 'Tarjeta' },
+                                                        ].map(m => (
+                                                            <button
+                                                                key={m.id}
+                                                                type="button"
+                                                                onClick={() => setCurrentSplitMethod(m.id)}
+                                                                className={`py-2 px-1 rounded-xl text-xs font-bold border transition-all flex flex-col items-center justify-center gap-1 ${
+                                                                    currentSplitMethod === m.id
+                                                                        ? 'bg-brand-600 border-brand-500 text-white shadow-sm'
+                                                                        : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+                                                                }`}
+                                                            >
+                                                                <span className="text-base">{m.icon}</span>
+                                                                <span className="truncate">{m.label}</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* Monto y N° Operación */}
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                        <div>
+                                                            <label className="text-[10px] text-gray-400 font-bold uppercase block mb-1">Monto a abonar (S/)</label>
+                                                            <input
+                                                                type="number"
+                                                                step="0.10"
+                                                                value={currentSplitAmount}
+                                                                onChange={(e) => setCurrentSplitAmount(e.target.value)}
+                                                                placeholder="0.00"
+                                                                className="w-full bg-gray-900 text-white font-bold text-center rounded-xl p-2 border border-gray-700 focus:border-brand-500 outline-none text-base"
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="text-[10px] text-gray-400 font-bold uppercase block mb-1">N° Operación (Opcional)</label>
+                                                            <input
+                                                                type="text"
+                                                                value={currentSplitRef}
+                                                                onChange={(e) => setCurrentSplitRef(e.target.value)}
+                                                                placeholder="Ej. 987654"
+                                                                className="w-full bg-gray-900 text-white font-medium text-center rounded-xl p-2 border border-gray-700 focus:border-brand-500 outline-none text-sm"
+                                                            />
+                                                        </div>
+                                                    </div>
+
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleAddSplitPayment}
+                                                        className="w-full py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md transition-all active:scale-95"
+                                                    >
+                                                        + Agregar {currentSplitMethod} de S/ {parseFloat(currentSplitAmount || 0).toFixed(2)}
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )
+                                })()}
+
                                 <button
                                     onClick={handleConfirmPayment}
-                                    disabled={sending || (selectedPaymentMethod === 'Efectivo' && (parseFloat(cashReceived) || 0) < sentTotal)}
+                                    disabled={
+                                        sending ||
+                                        (selectedPaymentMethod === 'Efectivo' && (parseFloat(cashReceived) || 0) < sentTotal) ||
+                                        (selectedPaymentMethod === 'Mixto' && splitPayments.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0) < sentTotal - 0.001)
+                                    }
                                     className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-800 disabled:text-gray-500 text-white rounded-2xl text-lg font-black tracking-wide shadow-lg transition-all active:scale-95"
                                 >
-                                    {sending ? '⏳ Registrando...' : `✅ Confirmar Pago Recibido`}
+                                    {sending
+                                        ? '⏳ Registrando...'
+                                        : (selectedPaymentMethod === 'Mixto' && splitPayments.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0) < sentTotal - 0.001)
+                                        ? `Falta cubrir S/ ${Math.max(0, sentTotal - splitPayments.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0)).toFixed(2)}`
+                                        : `✅ Confirmar Pago Recibido`}
                                 </button>
                             </div>
                         )}

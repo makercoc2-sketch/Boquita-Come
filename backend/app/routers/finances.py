@@ -19,6 +19,8 @@ def normalize_payment_method(method_raw: Any) -> str:
     if not method_raw:
         return "Efectivo"
     m = str(method_raw).strip().lower()
+    if "+" in m or "mixto" in m:
+        return "Pago Mixto"
     if "yape" in m or "plin" in m or "billetera" in m:
         return "Yape / Plin"
     if "pos" in m or "tarjeta" in m or "card" in m or "visa" in m or "master" in m:
@@ -78,6 +80,7 @@ class PaidOrderOut(BaseModel):
     items_count: int
     items_summary: List[OrderItemSummary] = []
     paid_at: datetime
+    payments: Optional[List[Dict[str, Any]]] = None
     
 # ─── Helper para obtener Rango de Fechas ──────────────────────────────────────
 # date_filter = "today", "week", "month", "all"
@@ -142,10 +145,19 @@ async def get_finances_summary(
         order_total = sum(float(i.price_at_time * i.quantity) for i in o.items)
         total_incomes += order_total
 
-        # Método de pago
-        pm_raw = o.extra.get("payment_method") if isinstance(o.extra, dict) else None
-        pm_norm = normalize_payment_method(pm_raw)
-        payment_methods[pm_norm] = payment_methods.get(pm_norm, 0.0) + order_total
+        # Método de pago (distribuir si es pago mixto / múltiple)
+        extra = o.extra if isinstance(o.extra, dict) else {}
+        order_payments = extra.get("payments")
+        if order_payments and isinstance(order_payments, list) and len(order_payments) > 0:
+            for p in order_payments:
+                p_method = p.get("method") or "Efectivo"
+                p_norm = normalize_payment_method(p_method)
+                p_amt = float(p.get("amount", 0.0))
+                payment_methods[p_norm] = payment_methods.get(p_norm, 0.0) + p_amt
+        else:
+            pm_raw = extra.get("payment_method")
+            pm_norm = normalize_payment_method(pm_raw)
+            payment_methods[pm_norm] = payment_methods.get(pm_norm, 0.0) + order_total
 
         # Adaptar la fecha grabada a local para que las barras agrupen correctamente
         aware_dt = o.updated_at if o.updated_at.tzinfo else o.updated_at.replace(tzinfo=local_tz)
@@ -259,8 +271,12 @@ async def list_paid_orders(
         is_delivery = extra.get("order_type") == "delivery" or (o.table and o.table.number == 0)
         customer_name = extra.get("customer_name") if is_delivery else None
         customer_phone = extra.get("customer_phone") if is_delivery else None
+        order_payments = extra.get("payments") if isinstance(extra.get("payments"), list) else None
         pm_raw = extra.get("payment_method")
-        pm_norm = normalize_payment_method(pm_raw)
+        if order_payments and len(order_payments) > 1:
+            pm_norm = " + ".join([p.get("method", "") for p in order_payments if p.get("method")]) or "Pago Mixto"
+        else:
+            pm_norm = normalize_payment_method(pm_raw)
         
         items_summary = []
         total = 0.0
@@ -292,7 +308,8 @@ async def list_paid_orders(
             total=round(total, 2),
             items_count=total_items_qty,
             items_summary=items_summary,
-            paid_at=o.updated_at
+            paid_at=o.updated_at,
+            payments=order_payments
         ))
     return output
 

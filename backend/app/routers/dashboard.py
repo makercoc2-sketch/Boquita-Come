@@ -31,6 +31,8 @@ def normalize_payment_method(method_raw: Any) -> str:
     if not method_raw:
         return "Efectivo"
     m = str(method_raw).strip().lower()
+    if "+" in m or "mixto" in m:
+        return "Pago Mixto"
     if "yape" in m or "plin" in m or "billetera" in m:
         return "Yape / Plin"
     if "pos" in m or "tarjeta" in m or "card" in m or "visa" in m or "master" in m:
@@ -84,9 +86,18 @@ async def get_dashboard_stats(
         total_revenue += order_total
 
         # Método de pago (cuadre de caja)
-        pm_raw = o.extra.get("payment_method") if isinstance(o.extra, dict) else None
-        pm_norm = normalize_payment_method(pm_raw)
-        payment_methods[pm_norm] = payment_methods.get(pm_norm, 0.0) + order_total
+        extra = o.extra if isinstance(o.extra, dict) else {}
+        order_payments = extra.get("payments")
+        if order_payments and isinstance(order_payments, list) and len(order_payments) > 0:
+            for p in order_payments:
+                p_method = p.get("method") or "Efectivo"
+                p_norm = normalize_payment_method(p_method)
+                p_amt = float(p.get("amount", 0.0))
+                payment_methods[p_norm] = payment_methods.get(p_norm, 0.0) + p_amt
+        else:
+            pm_raw = extra.get("payment_method")
+            pm_norm = normalize_payment_method(pm_raw)
+            payment_methods[pm_norm] = payment_methods.get(pm_norm, 0.0) + order_total
 
         # Por Día
         aware_dt = o.updated_at if o.updated_at.tzinfo else o.updated_at.replace(tzinfo=local_tz)
