@@ -140,7 +140,14 @@ async def serve_spa(full_path: str):
 
     index_html = os.path.join(frontend_dist, "index.html")
     if os.path.exists(index_html):
-        return FileResponse(index_html)
+        return FileResponse(
+            index_html,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+        )
 
     return {"status": "ok", "service": "boquita-come-pos", "message": "Backend activo. Compila el frontend para ver la interfaz aquí."}
 
