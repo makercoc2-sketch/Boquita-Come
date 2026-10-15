@@ -10,28 +10,14 @@ logger = logging.getLogger(__name__)
 async def kitchen_ws(websocket: WebSocket):
     """
     Pantalla de cocina. Recibe los tickets de cocina en tiempo real.
-
-    Protocolo de mensajes (JSON):
-    {
-        "event": "new_ticket",
-        "ticket": {
-            "ticket_id": 42,
-            "order_id": 10,
-            "table_number": 3,
-            "ticket_number": 2,
-            "items": [
-                {"product": "Lomo Saltado", "qty": 2, "notes": "sin cebolla",
-                 "modifiers": [{"group": "Término", "option": "Medio"}]}
-            ],
-            "created_at": "2026-02-19T20:30:00"
-        }
-    }
     """
     await manager.connect(websocket, room="kitchen")
     try:
         while True:
-            # Mantiene la conexión viva; acepta pings del cliente
+            # Mantiene la conexión viva; responde a pings del cliente
             data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
             logger.debug(f"[ws/kitchen] ping recibido: {data}")
     except WebSocketDisconnect:
         manager.disconnect(websocket, room="kitchen")
@@ -46,6 +32,8 @@ async def bar_ws(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
             logger.debug(f"[ws/bar] ping recibido: {data}")
     except WebSocketDisconnect:
         manager.disconnect(websocket, room="bar")
@@ -60,6 +48,8 @@ async def waiter_ws(websocket: WebSocket, user_id: int):
     try:
         while True:
             data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
             logger.debug(f"[ws/waiter] ping recibido: {data}")
     except WebSocketDisconnect:
         manager.disconnect(websocket, room=room)
@@ -68,13 +58,14 @@ async def waiter_ws(websocket: WebSocket, user_id: int):
 @router.websocket("/ws/global")
 async def global_ws(websocket: WebSocket):
     """
-    Canal de notificaciones globales. Recibe eventos que afectan a todos los perfiles,
-    como la llegada de un nuevo pedido.
+    Canal de notificaciones globales. Recibe eventos que afectan a todos los perfiles.
     """
     await manager.connect(websocket, room="global")
     try:
         while True:
             data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
             logger.debug(f"[ws/global] ping recibido: {data}")
     except WebSocketDisconnect:
         manager.disconnect(websocket, room="global")
@@ -83,17 +74,13 @@ async def global_ws(websocket: WebSocket):
 async def cashier_ws(websocket: WebSocket):
     """
     Pantalla de caja. Recibe notificaciones cuando una mesa pasa a 'Por Pagar'.
-
-    Protocolo de mensajes (JSON):
-    {
-        "event": "table_ready_to_pay",
-        "table": {"id": 3, "number": 3, "order_id": 10, "total": 92.50}
-    }
     """
     await manager.connect(websocket, room="cashier")
     try:
         while True:
             data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
             logger.debug(f"[ws/cashier] ping recibido: {data}")
     except WebSocketDisconnect:
         manager.disconnect(websocket, room="cashier")
@@ -108,6 +95,8 @@ async def table_ws(websocket: WebSocket, table_id: int):
     await manager.connect(websocket, room=room)
     try:
         while True:
-            await websocket.receive_text()
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
     except WebSocketDisconnect:
         manager.disconnect(websocket, room=room)

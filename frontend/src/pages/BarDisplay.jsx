@@ -20,8 +20,32 @@ export default function BarDisplay() {
     const [flashItemIds, setFlashItemIds] = useState([])
 
     const [dismissedChunkKeys, setDismissedChunkKeys] = useState([])
+    const [audioUnlocked, setAudioUnlocked] = useState(false)
 
     const { lastMessage, isConnected } = useWebSocket('bar')
+
+    // Desbloquear audio automáticamente al presionar cualquier botón del control remoto o clic en pantalla
+    useEffect(() => {
+        const unlockAudio = () => {
+            try {
+                const ctx = window._kdsAudioCtx || new (window.AudioContext || window.webkitAudioContext)()
+                if (!window._kdsAudioCtx) window._kdsAudioCtx = ctx
+                if (ctx.state === 'suspended') {
+                    ctx.resume().then(() => setAudioUnlocked(true))
+                } else if (ctx.state === 'running') {
+                    setAudioUnlocked(true)
+                }
+            } catch (e) { }
+        }
+        window.addEventListener('click', unlockAudio, { passive: true })
+        window.addEventListener('keydown', unlockAudio, { passive: true })
+        window.addEventListener('touchstart', unlockAudio, { passive: true })
+        return () => {
+            window.removeEventListener('click', unlockAudio)
+            window.removeEventListener('keydown', unlockAudio)
+            window.removeEventListener('touchstart', unlockAudio)
+        }
+    }, [])
 
     // Helper para fragmentar tickets con más de 3 ítems en múltiples tarjetas de 1 columna
     const splitTicketIntoChunks = (ticket, chunkSize = 3) => {
@@ -191,32 +215,68 @@ export default function BarDisplay() {
         return () => clearInterval(interval)
     }, [autoScroll])
 
-    // Cargar tickets activos al montar
-    const loadActiveTickets = useCallback(async () => {
+    // Cargar tickets activos (con diff inteligente para evitar renders innecesarios)
+    const loadActiveTickets = useCallback(async (isBackgroundPoll = false) => {
         try {
             const { data } = await getActiveKitchenTickets()
             // Filtrar tickets para quedarse con ítems solo de bar
-            const barTickets = data.map(ticket => ({
+            const barTickets = (data || []).map(ticket => ({
                 ...ticket,
-                items: ticket.items.filter(item => item.destination === 'bar')
+                items: (ticket.items || []).filter(item => item.destination === 'bar')
             })).filter(ticket => ticket.items.length > 0)
-            setTickets(barTickets.slice(0, 50)) // Mostrar los 50 más recientes
+
+            setTickets(prev => {
+                const prevSig = prev.map(t => `${t.ticket_id}_${t.ticket_number}_${(t.items || []).map(i => `${i.order_item_id}:${i.status}:${i.notes}`).join(',')}`).join('|')
+                const nextSlice = barTickets.slice(0, 50)
+                const newSig = nextSlice.map(t => `${t.ticket_id}_${t.ticket_number}_${(t.items || []).map(i => `${i.order_item_id}:${i.status}:${i.notes}`).join(',')}`).join('|')
+
+                if (prevSig === newSig) {
+                    return prev
+                }
+
+                if (isBackgroundPoll && prev.length > 0) {
+                    const prevIds = new Set(prev.map(t => t.ticket_id))
+                    const hasNewTicket = nextSlice.some(t => !prevIds.has(t.ticket_id))
+                    if (hasNewTicket) {
+                        try { playNewTicketChime() } catch (e) { }
+                    }
+                }
+
+                return nextSlice
+            })
         } catch (err) {
-            console.error('Error al cargar tickets:', err)
+            console.error('Error al cargar tickets bar:', err)
         }
     }, [])
 
     useEffect(() => {
-        loadActiveTickets()
+        loadActiveTickets(false)
+
+        // Polling de respaldo cada 5 segundos (garantiza que la pantalla de bar se actualice sola si el WebSocket cae)
+        const pollInterval = setInterval(() => {
+            loadActiveTickets(true)
+        }, 5000)
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                loadActiveTickets(false)
+            }
+        }
+        document.addEventListener('visibilitychange', handleVisibilityChange)
+
+        return () => {
+            clearInterval(pollInterval)
+            document.removeEventListener('visibilitychange', handleVisibilityChange)
+        }
     }, [loadActiveTickets])
 
     const loadHistoryTickets = async () => {
         setIsLoadingHistory(true)
         try {
             const { data } = await getTodayKitchenTickets()
-            const barTickets = data.map(ticket => ({
+            const barTickets = (data || []).map(ticket => ({
                 ...ticket,
-                items: ticket.items.filter(item => item.destination === 'bar')
+                items: (ticket.items || []).filter(item => item.destination === 'bar')
             })).filter(ticket => ticket.items.length > 0)
 
             setHistoryTickets(barTickets)
@@ -304,19 +364,26 @@ export default function BarDisplay() {
             const ticket = lastMessage.ticket
 
             // Filtrar ítems que no sean de bar
-            const barItems = ticket.items.filter(item => item.destination === 'bar')
+            const barItems = (ticket.items || []).filter(item => item.destination === 'bar')
             if (barItems.length === 0) return // Ignorar si no hay nada para el bar
 
             const filteredTicket = { ...ticket, items: barItems }
 
-            // Tono sonoro único al recibir nuevo pedido de bar
-            playNewTicketChime()
+            // Tono sonoro protegido al recibir nuevo pedido de bar
+            try {
+                playNewTicketChime()
+            } catch (e) {
+                console.warn('Error al reproducir timbre de nuevo pedido en bar:', e)
+            }
 
             setTickets(prev => {
                 // Evitar duplicados si el WS y el fetch traen el mismo
                 if (prev.some(t => t.ticket_id === filteredTicket.ticket_id)) return prev
                 return [filteredTicket, ...prev].slice(0, 50)
             })
+
+            // Sincronizar en segundo plano de inmediato para garantizar consistencia completa
+            loadActiveTickets(false)
         }
         else if (lastMessage.event === 'item_status_changed') {
             setTickets(prev => prev.map(t => ({
@@ -330,7 +397,7 @@ export default function BarDisplay() {
         }
         else if (lastMessage.event === 'item_updated') {
             if (lastMessage.item_id) {
-                playEditAlertChime()
+                try { playEditAlertChime() } catch (e) { }
                 setFlashItemIds(prev => [...prev, lastMessage.item_id])
                 setTimeout(() => {
                     setFlashItemIds(prev => prev.filter(id => id !== lastMessage.item_id))
@@ -344,14 +411,14 @@ export default function BarDisplay() {
                         : it
                 )
             })))
-            loadActiveTickets()
+            loadActiveTickets(false)
         }
         else if (lastMessage.event === 'item_deleted') {
             setTickets(prev => prev.map(t => ({
                 ...t,
                 items: (t.items || []).filter(it => it.order_item_id !== lastMessage.item_id)
             })).filter(t => t.items && t.items.length > 0))
-            loadActiveTickets()
+            loadActiveTickets(false)
         }
     }, [lastMessage, loadActiveTickets])
 
@@ -488,6 +555,21 @@ export default function BarDisplay() {
                             }`}
                     >
                         ⚡ Auto {autoDismiss ? '(ON)' : '(OFF)'}
+                    </button>
+
+                    {/* Alerta / Botón de Sonido */}
+                    <button
+                        onClick={() => {
+                            playNewTicketChime()
+                            setAudioUnlocked(true)
+                        }}
+                        title="Probar y asegurar alertas de sonido en la TV"
+                        className={`px-3 py-1.5 rounded-xl font-bold transition-all border flex items-center gap-1.5 ${audioUnlocked
+                            ? 'bg-gray-800 border-gray-700 text-yellow-400 hover:bg-gray-700'
+                            : 'bg-amber-600/30 border-amber-500 text-amber-300 animate-pulse'
+                            }`}
+                    >
+                        {audioUnlocked ? '🔔 Sonido OK' : '🔇 Activar Sonido'}
                     </button>
 
                     {/* Toggle Kiosk Fullscreen */}
