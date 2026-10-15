@@ -366,18 +366,45 @@ export default function OrderPanel() {
         try {
             let activeOrder = order
 
-            // Crear orden si no existe
-            if (!activeOrder) {
-                const { data } = await createOrder({ table_id: parseInt(tableId), user_id: user?.id })
-                activeOrder = data
-                setOrder(data)
-            }
-
-            // Agregar ítems
             const items = cart.map(({ product_id, quantity, modifiers, notes }) =>
                 ({ product_id, quantity, modifiers, notes: notes || null })
             )
-            await addOrderItems(activeOrder.id, items)
+
+            const obtainOrder = async () => {
+                if (isDelivery) {
+                    throw new Error("No se encontró el pedido delivery.")
+                }
+                try {
+                    const { data } = await createOrder({ table_id: parseInt(tableId), user_id: user?.id })
+                    return data
+                } catch (e) {
+                    if (e.response?.status === 409) {
+                        const activeRes = await api.get(`/orders/active/${tableId}`)
+                        return activeRes.data
+                    }
+                    throw e
+                }
+            }
+
+            // Si no hay orden o si activeOrder no tiene id, crearla
+            if (!activeOrder || !activeOrder.id) {
+                activeOrder = await obtainOrder()
+                setOrder(activeOrder)
+            }
+
+            // Intentar agregar los ítems a la orden
+            try {
+                await addOrderItems(activeOrder.id, items)
+            } catch (addErr) {
+                // Si la orden previa ya no existe (404) o fue cerrada (409), re-obtener/crear la orden activa
+                if (addErr.response?.status === 404 || addErr.response?.status === 409) {
+                    activeOrder = await obtainOrder()
+                    setOrder(activeOrder)
+                    await addOrderItems(activeOrder.id, items)
+                } else {
+                    throw addErr
+                }
+            }
 
             // Enviar a cocina → genera ticket WebSocket registrando el mozo emisor
             await sendToKitchen(activeOrder.id, { user_id: user?.id })
@@ -387,7 +414,7 @@ export default function OrderPanel() {
             setOrder(updated)
             setCart([])
         } catch (err) {
-            setError(err.response?.data?.detail ?? 'Error al enviar a cocina.')
+            setError(err.response?.data?.detail ?? err.message ?? 'Error al enviar a cocina.')
         } finally {
             setSending(false)
         }
