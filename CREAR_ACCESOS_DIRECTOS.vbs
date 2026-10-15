@@ -33,4 +33,11 @@ shortcut3.WorkingDirectory = scriptDir
 shortcut3.Description = "Arranque automatico de Boquita Come POS al encender la PC"
 shortcut3.Save
 
-WScript.Echo "✅ Accesos directos creados correctamente en el Escritorio y en el Inicio de Windows."
+' 4. Acceso Directo Actualizar en Escritorio
+Set shortcut4 = WshShell.CreateShortcut(desktopPath & "\Actualizar Boquita Come POS.lnk")
+shortcut4.TargetPath = scriptDir & "\ACTUALIZAR_SISTEMA.bat"
+shortcut4.WorkingDirectory = scriptDir
+shortcut4.Description = "Descargar y aplicar la ultima version de Boquita Come POS"
+shortcut4.Save
+
+WScript.Echo "✅ Accesos directos creados correctamente en el Escritorio (Iniciar, Detener, Actualizar) y en Inicio de Windows."
