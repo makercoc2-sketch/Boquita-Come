@@ -10,6 +10,9 @@ export const loginByPin = (data) => api.post('/auth/login', data)
 
 // Finances
 export const getFinancesSummary = (filter) => api.get(`/finances/summary?date_filter=${filter}`)
+export const getPaidOrders = (filter) => api.get(`/finances/orders?date_filter=${filter}`)
+export const deletePaidOrder = (id) => api.delete(`/finances/orders/${id}`)
+export const resetTestData = (params) => api.post('/finances/reset-test-data', null, { params })
 export const getExpenses = (filter) => api.get(`/finances/expenses?date_filter=${filter}`)
 export const createExpense = (data) => api.post('/finances/expenses', data)
 export const deleteExpense = (id) => api.delete(`/finances/expenses/${id}`)
