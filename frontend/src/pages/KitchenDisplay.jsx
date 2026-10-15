@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { getActiveKitchenTickets, getTodayKitchenTickets, updateItemStatus } from '../api/client'
 
@@ -53,38 +53,59 @@ export default function KitchenDisplay() {
         return chunks
     }
 
-    // Ordenar tickets según el filtro seleccionado
-    const sortedTickets = [...tickets].sort((a, b) => {
-        const timeA = new Date(a.created_at || 0).getTime()
-        const timeB = new Date(b.created_at || 0).getTime()
-        if (timeA === timeB) {
-            return sortOrder === 'asc' ? (a.ticket_id - b.ticket_id) : (b.ticket_id - a.ticket_id)
-        }
-        return sortOrder === 'asc' ? timeA - timeB : timeB - timeA
-    })
+    // Ordenar tickets según el filtro seleccionado (memoizado)
+    const sortedTickets = useMemo(() => {
+        return [...tickets].sort((a, b) => {
+            const timeA = new Date(a.created_at || 0).getTime()
+            const timeB = new Date(b.created_at || 0).getTime()
+            if (timeA === timeB) {
+                return sortOrder === 'asc' ? (a.ticket_id - b.ticket_id) : (b.ticket_id - a.ticket_id)
+            }
+            return sortOrder === 'asc' ? timeA - timeB : timeB - timeA
+        })
+    }, [tickets, sortOrder])
 
-    const sortedHistoryTickets = [...historyTickets].sort((a, b) => {
-        const timeA = new Date(a.created_at || 0).getTime()
-        const timeB = new Date(b.created_at || 0).getTime()
-        if (timeA === timeB) {
-            return sortOrder === 'asc' ? (a.ticket_id - b.ticket_id) : (b.ticket_id - a.ticket_id)
-        }
-        return sortOrder === 'asc' ? timeA - timeB : timeB - timeA
-    })
+    const sortedHistoryTickets = useMemo(() => {
+        return [...historyTickets].sort((a, b) => {
+            const timeA = new Date(a.created_at || 0).getTime()
+            const timeB = new Date(b.created_at || 0).getTime()
+            if (timeA === timeB) {
+                return sortOrder === 'asc' ? (a.ticket_id - b.ticket_id) : (b.ticket_id - a.ticket_id)
+            }
+            return sortOrder === 'asc' ? timeA - timeB : timeB - timeA
+        })
+    }, [historyTickets, sortOrder])
 
-    const displayTickets = sortedTickets
-        .flatMap(ticket => splitTicketIntoChunks(ticket, 3))
-        .filter(chunk => !dismissedChunkKeys.includes(chunk.chunk_key))
+    const displayTickets = useMemo(() => {
+        return sortedTickets
+            .flatMap(ticket => splitTicketIntoChunks(ticket, 3))
+            .filter(chunk => !dismissedChunkKeys.includes(chunk.chunk_key))
+    }, [sortedTickets, dismissedChunkKeys])
 
-    const displayHistoryTickets = sortedHistoryTickets
-        .flatMap(ticket => splitTicketIntoChunks(ticket, 3))
+    const displayHistoryTickets = useMemo(() => {
+        return sortedHistoryTickets
+            .flatMap(ticket => splitTicketIntoChunks(ticket, 3))
+    }, [sortedHistoryTickets])
 
-    // Helper de desplazamiento suave (smooth scroll JS) compatible con TV Bro / Android WebViews antiguos
-    const smoothScrollTo = (target, to, duration = 400) => {
+    // Helper de desplazamiento suave (smooth scroll JS) compatible con TV Bro / Android WebViews y navegadores modernos
+    const smoothScrollTo = (target, to, duration = 500) => {
         const isWin = target === window
         const start = isWin ? (window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0) : target.scrollTop
         const change = to - start
         if (Math.abs(change) < 2) return
+
+        let nativeSuccess = false
+        try {
+            if (isWin) {
+                window.scrollTo({ top: to, behavior: 'smooth' })
+                nativeSuccess = true
+            } else if (typeof target.scrollTo === 'function') {
+                target.scrollTo({ top: to, behavior: 'smooth' })
+                nativeSuccess = true
+            }
+        } catch (e) {
+            nativeSuccess = false
+        }
 
         const startTime = performance.now()
         const animateScroll = (currentTime) => {
@@ -105,7 +126,18 @@ export default function KitchenDisplay() {
                 requestAnimationFrame(animateScroll)
             }
         }
-        requestAnimationFrame(animateScroll)
+
+        if (!nativeSuccess) {
+            requestAnimationFrame(animateScroll)
+        } else {
+            setTimeout(() => {
+                if (isWin) {
+                    window.scrollTo(0, to)
+                } else {
+                    target.scrollTop = to
+                }
+            }, duration + 50)
+        }
     }
 
     // Auto-scroll cíclico por filas cada 5 segundos (Compatible con TV Bro & Android TV)
@@ -118,10 +150,11 @@ export default function KitchenDisplay() {
             let maxScroll = 0
             let visibleHeight = 0
 
+            // 1. Revisar si el contenedor de tickets desborda
             if (containerRef.current) {
                 const c = containerRef.current
                 const max = c.scrollHeight - c.clientHeight
-                if (max > 5) {
+                if (max > 15) {
                     targetEl = c
                     currentScroll = c.scrollTop
                     maxScroll = max
@@ -129,12 +162,13 @@ export default function KitchenDisplay() {
                 }
             }
 
+            // 2. Si el contenedor no desborda, revisar si la ventana principal desborda
             if (!targetEl) {
                 const docEl = document.documentElement
                 const body = document.body
                 const winMax = Math.max(docEl.scrollHeight, body.scrollHeight) - window.innerHeight
                 const winCurrent = window.scrollY || docEl.scrollTop || body.scrollTop || 0
-                if (winMax > 5) {
+                if (winMax > 15) {
                     targetEl = window
                     currentScroll = winCurrent
                     maxScroll = winMax
@@ -142,20 +176,20 @@ export default function KitchenDisplay() {
                 }
             }
 
-            if (!targetEl || maxScroll <= 5) return
+            if (!targetEl || maxScroll <= 15) return
 
-            const step = Math.max(160, Math.floor(visibleHeight * 0.7))
+            const step = Math.max(200, Math.floor(visibleHeight * 0.7))
             const next = currentScroll + step
 
-            if (currentScroll + 15 >= maxScroll) {
-                smoothScrollTo(targetEl, 0, 500)
+            if (currentScroll + 25 >= maxScroll) {
+                smoothScrollTo(targetEl, 0, 600)
             } else {
-                smoothScrollTo(targetEl, next, 500)
+                smoothScrollTo(targetEl, next, 600)
             }
         }, 5000)
 
         return () => clearInterval(interval)
-    }, [autoScroll, displayTickets])
+    }, [autoScroll])
 
     // Cargar tickets activos al montar
     const loadActiveTickets = useCallback(async () => {
@@ -333,16 +367,18 @@ export default function KitchenDisplay() {
         if (!autoDismiss) return
         const timer = setTimeout(() => {
             setDismissedChunkKeys(prev => {
+                let hasChanges = false
                 const newDismissed = [...prev]
                 displayTickets.forEach(chunk => {
                     const items = chunk.chunk_items ?? []
                     if (items.length > 0 && items.every(it => it.status === 'COMPLETED' || it.status === 'DELIVERED')) {
                         if (!newDismissed.includes(chunk.chunk_key)) {
                             newDismissed.push(chunk.chunk_key)
+                            hasChanges = true
                         }
                     }
                 })
-                return newDismissed
+                return hasChanges ? newDismissed : prev
             })
         }, 3000)
         return () => clearTimeout(timer)
