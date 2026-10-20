@@ -12,6 +12,7 @@ import OrderPanel from './pages/OrderPanel'
 import Login from './pages/Login'
 import Settings from './pages/Settings'
 import GlobalNotifications from './components/GlobalNotifications'
+import KitchenRemoteControl from './components/KitchenRemoteControl' 
 
 export default function App() {
     const location = useLocation()
@@ -46,6 +47,7 @@ export default function App() {
     return (
         <div className="min-h-screen flex flex-col">
             <GlobalNotifications />
+            <KitchenRemoteControl />
             {/* ── Navbar ──────────────────────────────────────────────── */}
             <nav className="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-3 flex items-center justify-between gap-4 overflow-x-auto">
                 <div className="flex items-center gap-4 sm:gap-6">

@@ -42,6 +42,7 @@ export const sendToKitchen = (id, data = {}) => api.post(`/orders/${id}/send-kit
 export const closeOrder = (id, data) => api.post(`/orders/${id}/close`, data)
 export const getActiveKitchenTickets = () => api.get('/orders/kitchen-tickets/active')
 export const getTodayKitchenTickets = () => api.get('/orders/kitchen-tickets/today')
+export const sendKitchenControl = (action, value = null) => api.post('/orders/kitchen/control', { action, value })
 export const updateItemStatus = (itemId, status) => api.patch(`/orders/items/${itemId}/status`, { status })
 export const updateOrderItem = (itemId, data) => api.put(`/orders/items/${itemId}`, data)
 export const deleteOrderItem = (itemId, userRole) => api.delete(`/orders/items/${itemId}`, { params: { user_role: userRole } })

@@ -210,7 +210,7 @@ export default function BarDisplay() {
             } else {
                 smoothScrollTo(targetEl, next, 600)
             }
-        }, 5000)
+        }, 10_000)
 
         return () => clearInterval(interval)
     }, [autoScroll])
@@ -539,7 +539,7 @@ export default function BarDisplay() {
                             : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
                             }`}
                     >
-                        📜 Auto-scroll {autoScroll ? '(ON)' : '(OFF)'}
+                        📜 Auto-scroll 10s {autoScroll ? '(ON)' : '(OFF)'}
                     </button>
 
                     {/* Toggle auto-ocultar */}

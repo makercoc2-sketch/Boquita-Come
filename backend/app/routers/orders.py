@@ -416,6 +416,31 @@ async def get_today_kitchen_tickets(db: AsyncSession = Depends(get_db)):
     return payloads
 
 
+class KitchenControlPayload(BaseModel):
+    action: str  # "scroll_down", "scroll_up", "scroll_top", "toggle_autoscroll", "set_autoscroll"
+    value: Optional[bool] = None
+
+
+@router.post("/kitchen/control")
+async def control_kitchen_display(payload: KitchenControlPayload):
+    """
+    Control remoto de la pantalla de cocina desde Caja / Administración.
+    Permite desplazar la pantalla (arriba/abajo/inicio) o pausar/activar el auto-scroll en tiempo real.
+    """
+    await manager.broadcast_to_room("kitchen", {
+        "event": "kds_remote_control",
+        "action": payload.action,
+        "value": payload.value,
+    })
+    await manager.broadcast_to_room("global", {
+        "event": "kds_remote_control",
+        "action": payload.action,
+        "value": payload.value,
+    })
+    return {"status": "ok", "action": payload.action, "value": payload.value}
+
+
+
 
 @router.post("/{order_id}/items", response_model=OrderOut)
 async def add_items(

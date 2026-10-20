@@ -21,6 +21,17 @@ export default function KitchenDisplay() {
 
     const [dismissedChunkKeys, setDismissedChunkKeys] = useState([])
     const [audioUnlocked, setAudioUnlocked] = useState(false)
+    const pauseUntilRef = useRef(0)
+    const [remoteToast, setRemoteToast] = useState(null)
+    const toastTimerRef = useRef(null)
+
+    const showRemoteToast = useCallback((msg) => {
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+        setRemoteToast(msg)
+        toastTimerRef.current = setTimeout(() => {
+            setRemoteToast(null)
+        }, 3000)
+    }, [])
 
     const { lastMessage, isConnected } = useWebSocket('kitchen')
 
@@ -164,56 +175,65 @@ export default function KitchenDisplay() {
         }
     }
 
-    // Auto-scroll cíclico por filas cada 5 segundos (Compatible con TV Bro & Android TV)
+    // Helper para obtener el elemento desplazable y sus dimensiones
+    const getScrollInfo = useCallback(() => {
+        let targetEl = null
+        let currentScroll = 0
+        let maxScroll = 0
+        let visibleHeight = 0
+
+        // 1. Revisar si el contenedor de tickets desborda
+        if (containerRef.current) {
+            const c = containerRef.current
+            const max = c.scrollHeight - c.clientHeight
+            if (max > 15) {
+                targetEl = c
+                currentScroll = c.scrollTop
+                maxScroll = max
+                visibleHeight = c.clientHeight
+            }
+        }
+
+        // 2. Si el contenedor no desborda, revisar si la ventana principal desborda
+        if (!targetEl) {
+            const docEl = document.documentElement
+            const body = document.body
+            const winMax = Math.max(docEl.scrollHeight, body.scrollHeight) - window.innerHeight
+            const winCurrent = window.scrollY || docEl.scrollTop || body.scrollTop || 0
+            if (winMax > 15) {
+                targetEl = window
+                currentScroll = winCurrent
+                maxScroll = winMax
+                visibleHeight = window.innerHeight
+            }
+        }
+
+        return { targetEl, currentScroll, maxScroll, visibleHeight }
+    }, [])
+
+    // Auto-scroll cíclico por filas cada 10 segundos (Compatible con TV Bro & Android TV)
     useEffect(() => {
         if (!autoScroll) return
 
         const interval = setInterval(() => {
-            let targetEl = null
-            let currentScroll = 0
-            let maxScroll = 0
-            let visibleHeight = 0
+            // Si hubo manipulación remota reciente desde Caja, respetar la pausa de lectura
+            if (Date.now() < pauseUntilRef.current) return
 
-            // 1. Revisar si el contenedor de tickets desborda
-            if (containerRef.current) {
-                const c = containerRef.current
-                const max = c.scrollHeight - c.clientHeight
-                if (max > 15) {
-                    targetEl = c
-                    currentScroll = c.scrollTop
-                    maxScroll = max
-                    visibleHeight = c.clientHeight
-                }
-            }
-
-            // 2. Si el contenedor no desborda, revisar si la ventana principal desborda
-            if (!targetEl) {
-                const docEl = document.documentElement
-                const body = document.body
-                const winMax = Math.max(docEl.scrollHeight, body.scrollHeight) - window.innerHeight
-                const winCurrent = window.scrollY || docEl.scrollTop || body.scrollTop || 0
-                if (winMax > 15) {
-                    targetEl = window
-                    currentScroll = winCurrent
-                    maxScroll = winMax
-                    visibleHeight = window.innerHeight
-                }
-            }
-
+            const { targetEl, currentScroll, maxScroll, visibleHeight } = getScrollInfo()
             if (!targetEl || maxScroll <= 15) return
 
             const step = Math.max(200, Math.floor(visibleHeight * 0.7))
             const next = currentScroll + step
 
             if (currentScroll + 25 >= maxScroll) {
-                smoothScrollTo(targetEl, 0, 600)
+                smoothScrollTo(targetEl, 0, 700)
             } else {
-                smoothScrollTo(targetEl, next, 600)
+                smoothScrollTo(targetEl, next, 700)
             }
-        }, 5000)
+        }, 10_000)
 
         return () => clearInterval(interval)
-    }, [autoScroll])
+    }, [autoScroll, getScrollInfo])
 
     // Cargar tickets activos (con diff inteligente para evitar renders innecesarios)
     const loadActiveTickets = useCallback(async (isBackgroundPoll = false) => {
@@ -410,7 +430,47 @@ export default function KitchenDisplay() {
             })).filter(t => t.items && t.items.length > 0))
             loadActiveTickets(false)
         }
-    }, [lastMessage, loadActiveTickets])
+        else if (lastMessage.event === 'kds_remote_control') {
+            const action = lastMessage.action
+            const { targetEl, currentScroll, maxScroll, visibleHeight } = getScrollInfo()
+
+            if (action === 'scroll_down') {
+                if (targetEl) {
+                    const step = Math.max(200, Math.floor(visibleHeight * 0.7))
+                    const next = Math.min(maxScroll, currentScroll + step)
+                    smoothScrollTo(targetEl, next, 600)
+                    pauseUntilRef.current = Date.now() + 25_000
+                    showRemoteToast('🔽 Vista bajada desde Caja')
+                }
+            } else if (action === 'scroll_up') {
+                if (targetEl) {
+                    const step = Math.max(200, Math.floor(visibleHeight * 0.7))
+                    const prev = Math.max(0, currentScroll - step)
+                    smoothScrollTo(targetEl, prev, 600)
+                    pauseUntilRef.current = Date.now() + 25_000
+                    showRemoteToast('🔼 Vista subida desde Caja')
+                }
+            } else if (action === 'scroll_top') {
+                if (targetEl) {
+                    smoothScrollTo(targetEl, 0, 600)
+                    pauseUntilRef.current = Date.now() + 25_000
+                    showRemoteToast('🔝 Vista al Inicio desde Caja')
+                }
+            } else if (action === 'set_autoscroll') {
+                const val = Boolean(lastMessage.value)
+                setAutoScroll(val)
+                localStorage.setItem('kds_auto_scroll', String(val))
+                showRemoteToast(val ? '📜 Auto-scroll ACTIVADO desde Caja (10s)' : '⏸️ Auto-scroll PAUSADO desde Caja')
+            } else if (action === 'toggle_autoscroll') {
+                setAutoScroll(prev => {
+                    const next = !prev
+                    localStorage.setItem('kds_auto_scroll', String(next))
+                    showRemoteToast(next ? '📜 Auto-scroll ACTIVADO desde Caja (10s)' : '⏸️ Auto-scroll PAUSADO desde Caja')
+                    return next
+                })
+            }
+        }
+    }, [lastMessage, loadActiveTickets, getScrollInfo, showRemoteToast])
 
 
     const dismissChunk = (chunkKey) => {
@@ -530,7 +590,7 @@ export default function KitchenDisplay() {
                             : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
                             }`}
                     >
-                        📜 Auto-scroll {autoScroll ? '(ON)' : '(OFF)'}
+                        📜 Auto-scroll 10s {autoScroll ? '(ON)' : '(OFF)'}
                     </button>
 
                     {/* Toggle auto-ocultar */}
@@ -647,6 +707,14 @@ export default function KitchenDisplay() {
                         ))}
                     </div>
                 )
+            )}
+
+            {/* Notificación Flotante de Control Remoto desde Caja */}
+            {remoteToast && (
+                <div className="fixed bottom-6 right-6 z-50 bg-brand-600/95 border-2 border-brand-400 text-white font-black px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2.5 animate-bounce text-sm">
+                    <span className="text-xl">📡</span>
+                    <span>{remoteToast}</span>
+                </div>
             )}
         </div>
     )
