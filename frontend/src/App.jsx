@@ -66,6 +66,16 @@ export default function App() {
                     {navLink('/settings', '⚙️ Configuración', ['Administrador', 'Sistemas'])}
                 </div>
                 <div className="flex items-center gap-3 sm:gap-4">
+                    {['Administrador', 'Sistemas', 'Caja'].includes(user.role) && (
+                        <button
+                            onClick={() => window.dispatchEvent(new CustomEvent('toggle-kds-remote'))}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-950/80 hover:bg-brand-900 border border-brand-700/60 text-brand-300 hover:text-brand-200 font-bold rounded-xl text-xs transition-all shadow-sm active:scale-95 shrink-0"
+                            title="Abrir Control Remoto de Cocina"
+                        >
+                            <span className="text-base">🍳</span>
+                            <span>Control Cocina</span>
+                        </button>
+                    )}
                     <span className="text-gray-400 text-sm hidden lg:inline-block">
                         Hola, <strong className="text-white">{user.name}</strong> ({user.role})
                     </span>
